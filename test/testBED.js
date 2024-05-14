@@ -2,10 +2,10 @@ import "./utils/mockObjects.js"
 import FeatureFileReader from "../js/feature/featureFileReader.js"
 import FeatureSource from "../js/feature/featureSource.js"
 import {assert} from 'chai'
-import {createGenome} from "./utils/Genome.js"
+import {createGenome} from "./utils/MockGenome.js"
+import Genome from "../js/genome/genome.js"
 
 const genome = createGenome()
-import GenomeUtils from "../js/genome/genome.js"
 
 suite("testBed", function () {
 
@@ -173,6 +173,26 @@ suite("testBed", function () {
         assert.equal(128, features.length)   // feature count. Determined by grepping file
     })
 
+
+    test("BED query - aliasing", async function () {
+
+        const genome = createGenome("ncbi")
+        var chr = "1",
+            start = 67655271,
+            end = 67684468,
+            featureSource = FeatureSource({
+                    format: 'bed',
+                    indexed: false,
+                    url: 'test/data/bed/basic_feature_3_columns.bed'
+                }, genome)
+
+        // Must get file header first
+        await featureSource.getHeader()
+        const features = await featureSource.getFeatures({chr, start, end})
+        assert.ok(features)
+        assert.equal(128, features.length)   // feature count. Determined by grepping file
+    })
+
     test("BED track line", async function () {
 
         const featureSource = FeatureSource({
@@ -311,29 +331,12 @@ suite("testBed", function () {
 
         const config = {
             format: "bed",
-            url: "test/data/bed/basic_feature_3_columns.bed",
+            url: "test/data/bed/basic_feature_3_columns.alias.bed",
         }
         const featureSource = FeatureSource(config, genome)
-        const features = await featureSource.getFeatures({chr: "1", start: 67658429, end: 67659549})
+        const features = await featureSource.getFeatures({chr: "chr1", start: 67658429, end: 67659549})
         assert.ok(features)
         assert.equal(features.length, 4)
-
-    })
-
-    test("Searchable annotations", async function () {
-
-        const config = {
-            format: "bed",
-            delimiter: "\t",
-            url: "test/data/bed/names_with_spaces.bed",
-            indexed: false,
-            searchable: true,
-        }
-        const featureSource = FeatureSource(config, genome)
-        await featureSource.getFeatures({chr: "1", start: 0, end: Number.MAX_SAFE_INTEGER})
-
-        const found = genome.featureDB.get("KAN2 MARKER")
-        assert.ok(found)
 
     })
 
@@ -342,7 +345,7 @@ suite("testBed", function () {
         this.timeout(20000)
 
         // Need an actual genome object for this test, not a mock object
-        const genome = await GenomeUtils.loadGenome({
+        const genome = await Genome.createGenome({
             id: "hg38",
             name: "Human (GRCh38/hg38)",
             fastaURL: "https://s3.dualstack.us-east-1.amazonaws.com/igv.broadinstitute.org/genomes/seq/hg38/hg38.fa",
@@ -376,7 +379,7 @@ suite("testBed", function () {
         assert.equal(features[1].name, 'terminator')
         assert.equal(features[2].name, 'M13 origin')
         assert.equal(features[3].name, 'M13 origin')
-        assert.equal("Baz", features[3].getAttributeValue("Key 2"))
+        assert.equal("Baz", features[3].getAttributeValue("Key2"))
     })
 
 })

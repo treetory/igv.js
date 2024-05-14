@@ -52,7 +52,7 @@ class StaticFeatureSource {
         this.featureCache = new FeatureCache(features, this.genome)
 
         if (this.searchable || this.config.searchableFields) {
-            this.genome.addFeaturesToDB(features, this.config)
+            this.addFeaturesToDB(features, this.config)
         }
     }
 
@@ -98,6 +98,36 @@ class StaticFeatureSource {
         return true
     }
 
+    addFeaturesToDB(featureList, config) {
+        if (!this.featureMap) {
+            this.featureMap = new Map()
+        }
+        const searchableFields = config.searchableFields || ["name"]
+        for (let feature of featureList) {
+            for (let field of searchableFields) {
+                let key
+
+                if (typeof feature.getAttributeValue === 'function') {
+                    key = feature.getAttributeValue(field)
+                }
+                if (!key) {
+                    key = feature[field]
+                }
+                if (key) {
+                    key = key.replaceAll(' ', '+')
+                    const current = this.featureMap.get(key.toUpperCase())
+                    if (current && ((current.end - current.start) > (feature.end - feature.start))) continue
+                    this.featureMap.set(key.toUpperCase(), feature)
+                }
+            }
+        }
+    }
+
+    search(term) {
+        if (this.featureMap) {
+            return this.featureMap.get(term.toUpperCase())
+        }
+    }
 
 }
 
@@ -119,7 +149,6 @@ function fixFeatures(features, genome) {
 }
 
 
-
 function mapProperties(features, mappings) {
     let mappingKeys = Object.keys(mappings)
     features.forEach(function (f) {
@@ -128,7 +157,6 @@ function mapProperties(features, mappings) {
         })
     })
 }
-
 
 
 export default StaticFeatureSource

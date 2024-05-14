@@ -6,7 +6,7 @@ import VariantTrack from "../js/variant/variantTrack.js"
 import InteractionTrack from "../js/feature/interactionTrack.js"
 import BlatTrack from "../js/blat/blatTrack.js"
 import FeatureTrack from "../js/feature/featureTrack.js"
-import {createGenome} from "./utils/Genome.js"
+import {createGenome} from "./utils/MockGenome.js"
 
 const genome = createGenome()
 
@@ -120,7 +120,7 @@ suite("test getState()", function () {
 
         // Change some properties and assert that they are recorded in "state"
         track.showCoverage = false
-        track.viewAsPairs = true
+        track.alignmentTrack.viewAsPairs = true
         const state = track.getState()
         assert.equal(state.showCoverage, false)
         assert.equal(state.viewAsPairs, true)

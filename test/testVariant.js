@@ -4,7 +4,7 @@ import FeatureFileReader from "../js/feature/featureFileReader.js"
 import {igvxhr} from "../node_modules/igv-utils/src/index.js"
 import {assert} from 'chai'
 import getDataWrapper from "../js/feature/dataWrapper.js"
-import {createGenome} from "./utils/Genome.js"
+import {createGenome} from "./utils/MockGenome.js"
 
 const genome = createGenome()
 import Browser from "../js/browser.js"
@@ -42,6 +42,7 @@ suite("testVariant", function () {
         assert.equal(variants.length, 5)
         for (let v of variants) {
             assert.equal(v.type, "MIXED")
+            assert.ok(!v.isFiltered())
         }
     })
 
@@ -123,6 +124,7 @@ suite("testVariant", function () {
         assert.equal(del.pos, 69091)
         assert.equal(del.start, 69090)
         assert.equal(del.end, 70008)
+        assert.ok(del.isFiltered())
     })
 
 
@@ -144,6 +146,7 @@ suite("testVariant", function () {
         assert.equal(tra.pos, 564466)
         assert.equal(tra.start, 564465)
         assert.equal(tra.end, 564466)
+        assert.ok(!tra.isFiltered())
     })
 
     test("tribble indexed - large header", async function () {
@@ -215,7 +218,7 @@ suite("testVariant", function () {
         const track = await Browser.prototype.createTrack.call(browser, config)
         assert.equal(track.type, "variant")
 
-        const chr = "2"
+        const chr = "chr2"
         const start = 321681
         const end = 321682
         const features = await track.getFeatures(chr, start, end)

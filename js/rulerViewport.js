@@ -1,10 +1,11 @@
 import TrackViewport from "./trackViewport.js"
 import $ from "./vendor/jquery-3.3.1.slim.js"
 import RulerSweeper from "./rulerSweeper.js"
-import GenomeUtils from "./genome/genome.js"
+import GenomeUtils from "./genome/genomeUtils.js"
 import {IGVMath, StringUtils} from "../node_modules/igv-utils/src/index.js"
-import {DOMUtils, Icon} from "../node_modules/igv-ui/dist/igv-ui.js"
-import {getChrColor} from "./bam/bamTrack.js"
+import * as DOMUtils from "./ui/utils/dom-utils.js"
+import {createIcon} from "./ui/utils/icons.js"
+import {getChrColor} from "./util/getChrColor.js"
 
 let timer
 let currentViewport = undefined
@@ -24,7 +25,7 @@ class RulerViewport extends TrackViewport {
 
         this.$multiLocusCloseButton = $('<div>', {class: 'igv-multi-locus-close-button'})
         this.$viewport.append(this.$multiLocusCloseButton)
-        this.$multiLocusCloseButton.get(0).appendChild(Icon.createIcon("times-circle"))
+        this.$multiLocusCloseButton.get(0).appendChild(createIcon("times-circle"))
 
         this.$multiLocusCloseButton.click(() => {
             this.browser.removeMultiLocusPanel(this.referenceFrame)
@@ -147,7 +148,7 @@ class RulerViewport extends TrackViewport {
 
     mouseMove(event) {
 
-        if (true === this.browser.cursorGuideVisible) {
+        if (true === this.browser.doShowCursorGuide) {
 
             if (undefined === currentViewport) {
                 currentViewport = this

@@ -15,7 +15,7 @@
     "build": "node scripts/updateVersion.cjs && node scripts/generateEmbedCss.cjs && npx rollup --config",
     "build_iife": "node scripts/updateVersion.cjs && node scripts/generateEmbedCss.cjs && npx rollup --config rollup.config.iife.js",
     "updateCSS": "node scripts/generateEmbedCss.cjs",
-    "test": "mocha -ui tdd"
+    "test": "node test/utils/forceESM.cjs && mocha -ui tdd"
   },
   "author": {
     "name": "Jim Robinson"
@@ -50,14 +50,16 @@
     "btoa": "^1.2.1",
     "chai": "^4.3.7",
     "circular-view": "github:igvteam/circular-view#v0.2.4",
+    "dompurify": "^3.0.9",
     "eslint": "^6.4.0",
-    "hdf5-indexed-reader": "github:jrobinso/hdf5-indexed-reader#v0.5.2",
-    "igv-ui": "github:igvteam/igv-ui#v1.5.0",
-    "igv-utils": "github:igvteam/igv-utils#v1.4.7",
+    "hdf5-indexed-reader": "github:jrobinso/hdf5-indexed-reader#v0.5.6",
+    "html2canvas": "^1.4.1",
+    "igv-utils": "github:igvteam/igv-utils#v1.4.8",
     "mocha": "^10.2.0",
     "rollup": "^2.66.0",
     "rollup-plugin-copy": "^3.3.0",
     "sass": "^1.45.1",
+    "vanilla-picker": "^2.12.1",
     "w3c-xmlhttprequest": "^3.0.0"
   }
 }

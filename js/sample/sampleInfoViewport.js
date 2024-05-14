@@ -1,9 +1,7 @@
-import {DOMUtils} from '../../node_modules/igv-ui/dist/igv-ui.js'
+import * as DOMUtils from "../ui/utils/dom-utils.js"
 import {appleCrayonRGB} from '../util/colorPalletes.js'
-import {attributeNamesMap, emptySpaceReplacement, sampleDictionary} from './sampleInfo.js'
-
-const sampleInfoTileXShim = 2
-const sampleInfoTileWidth = 16
+import {attributeNames, emptySpaceReplacement, sampleDictionary} from './sampleInfo.js'
+import {sampleInfoTileWidth, sampleInfoTileXShim} from "./sampleInfoConstants.js"
 
 class SampleInfoViewport {
 
@@ -32,13 +30,6 @@ class SampleInfoViewport {
         this.setWidth(width)
 
         this.addMouseHandlers()
-    }
-
-    static getSampleInfoColumnWidth(browser) {
-        const found = browser.findTracks(t => typeof t.getSamples === 'function')
-        return (found.length > 0 && browser.sampleInfo.isInitialized() && true === browser.sampleInfoControl.showSampleInfo)
-            ? sampleInfoTileXShim + browser.sampleInfo.getAttributeNames().length * sampleInfoTileWidth
-            : 0
     }
 
     checkCanvas() {
@@ -74,16 +65,6 @@ class SampleInfoViewport {
         this.checkCanvas()
     }
 
-    static async update(browser) {
-
-        for (const {sampleNameViewport} of browser.trackViews) {
-            sampleNameViewport.setWidth(SampleInfoViewport.getSampleInfoColumnWidth(browser))
-        }
-
-        await browser.layoutChange()
-
-    }
-
     async repaint(samples) {
 
         this.checkCanvas()
@@ -98,7 +79,7 @@ class SampleInfoViewport {
         context.fillRect(0, 0, context.canvas.width, context.canvas.height)
 
         if (sampleDictionary && samples && samples.names.length > 0) {
-            this.browser.sampleInfo.getAttributeNames();
+            // this.browser.sampleInfo.attributeNames
 
             const viewportHeight = this.viewport.getBoundingClientRect().height
 
@@ -108,7 +89,8 @@ class SampleInfoViewport {
 
             shim = tileHeight - 2 * shim <= 1 ? 0 : 1
 
-            let y = this.contentTop
+            let y = this.contentTop + samples.yOffset
+
             this.hitList = {}
             for (const sampleName of samples.names) {
 
@@ -130,10 +112,11 @@ class SampleInfoViewport {
 
                             context.fillStyle = this.browser.sampleInfo.getAttributeColor(attribute, value)
 
-                            const x = sampleInfoTileXShim + attributeNamesMap.get(attribute) * sampleInfoTileWidth
+                            const index = attributeNames.indexOf(attribute)
+                            const x = sampleInfoTileXShim + index * sampleInfoTileWidth
                             const yy = y + shim
                             const hh = tileHeight - (2 * shim)
-                            context.fillRect(x, yy, sampleInfoTileWidth, hh)
+                            context.fillRect(x, yy, sampleInfoTileWidth - 1, hh)
 
                             const key = `${Math.floor(x)}#${Math.floor(yy)}#${sampleInfoTileWidth}#${Math.ceil(hh)}`
                             this.hitList[key] = `${attribute}#${value}`
@@ -150,6 +133,27 @@ class SampleInfoViewport {
 
         }
 
+    }
+
+    renderSVGContext(context, {deltaX, deltaY}) {
+
+        if (typeof this.trackView.track.getSamples === 'function') {
+
+            const samples = this.trackView.track.getSamples()
+
+            const yScrollDelta = 0   // This is not relevant, scrolling is handled in "draw"
+
+            const {width, height} = this.viewport.getBoundingClientRect()
+
+            const str = (this.trackView.track.name || this.trackView.track.id).replace(/\W/g, '')
+            const id = `${str}_sample_names_guid_${DOMUtils.guid()}`
+
+            context.saveWithTranslationAndClipRect(id, deltaX, deltaY + yScrollDelta, width, height, -yScrollDelta)
+
+            this.draw({context, samples})
+
+            context.restore()
+        }
     }
 
     addMouseHandlers() {
@@ -190,6 +194,11 @@ class SampleInfoViewport {
         this.viewport.removeEventListener('mousemove', this.boundMouseMoveHandler)
     }
 
+    dispose() {
+        this.removeMouseHandlers()
+        this.viewport.remove()
+    }
+
     show() {
         this.viewport.style.display = 'block'
     }
@@ -198,10 +207,6 @@ class SampleInfoViewport {
         this.viewport.style.display = 'none'
     }
 
-    dispose() {
-        this.removeMouseHandlers()
-        this.viewport.remove()
-    }
 }
 
 export default SampleInfoViewport

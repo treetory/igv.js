@@ -25,6 +25,9 @@
 
 import {isSimpleType} from "./util/igvUtils.js"
 import {FeatureUtils, FileUtils, StringUtils} from "../node_modules/igv-utils/src/index.js"
+import {getMultiSelectedTrackViews, isMultiSelectedTrackView} from "./ui/menuUtils.js"
+import $ from "./vendor/jquery-3.3.1.slim.js"
+import {createCheckbox} from "./igv-icons.js"
 
 const DEFAULT_COLOR = 'rgb(150,150,150)'
 
@@ -105,6 +108,8 @@ class TrackBase {
         this.minHeight = config.minHeight || Math.min(25, this.height)
         this.maxHeight = config.maxHeight || Math.max(1000, this.height)
 
+        this.isMultiSelection = config.isMultiSelection || false
+
         if (config.onclick) {
             this.onclick = config.onclick
             config.onclick = undefined   // functions cannot be saved in sessions, clear it here.
@@ -139,15 +144,6 @@ class TrackBase {
         }
     }
 
-    /**
-     * Update track properties from the config object.
-     *
-     * @param config
-     */
-    updateConfig(config) {
-        this.init(config)
-    }
-
     clearCachedFeatures() {
         if (this.trackView) {
             this.trackView.clearCachedFeatures()
@@ -160,19 +156,29 @@ class TrackBase {
         }
     }
 
+    repaintViews() {
+        if (this.trackView) {
+            this.trackView.repaintViews();
+        }
+    }
+
     /**
      * Used to create session object for bookmarking, sharing.  Only simple property values (string, number, boolean)
      * are saved.
      */
     getState() {
 
-        const jsonable = (v) => !(v === undefined || typeof v === 'function' || v instanceof File || v instanceof Promise)
+        const isJSONable = item => !(item === undefined || typeof item === 'function' || item instanceof Promise)
 
         // Create copy of config, minus transient properties (convention is name starts with '_').  Also, all
         // function properties are transient as they cannot be saved in json
         const state = {}
-        for (let key of Object.keys(this.config)) {
-            if (!key.startsWith("_") && jsonable(this.config[key])) {
+
+        const jsonableConfigKeys = Object.keys(this.config).filter(key => isJSONable(this.config[key]))
+
+        for (const key of jsonableConfigKeys) {
+
+            if (!key.startsWith("_")) {
                 state[key] = this.config[key]
             }
         }
@@ -187,7 +193,7 @@ class TrackBase {
         }
 
         // If user has changed other properties from defaults update state.
-        const defs = TrackBase.defaults
+        const defs = Object.assign({}, TrackBase.defaults)
         if (this.constructor.defaults) {
             for (let key of Object.keys(this.constructor.defaults)) {
                 defs[key] = this.constructor.defaults[key]
@@ -203,6 +209,10 @@ class TrackBase {
         if (!this.autoscale && this.dataRange) {
             state.min = this.dataRange.min
             state.max = this.dataRange.max
+        }
+
+        if (this.autoscaleGroup) {
+            state.autoscaleGroup = this.autoscaleGroup
         }
 
         return state
@@ -343,7 +353,6 @@ class TrackBase {
      * the genomic location.   Overriden by most subclasses.
      *
      * @param clickState
-     * @param features
      * @returns {[]|*[]}
      */
     clickedFeatures(clickState) {
@@ -367,8 +376,7 @@ class TrackBase {
 
     /**
      * Default popup text function -- just extracts string and number properties in random order.
-     * @param feature
-     * @returns {Array}
+     * @param feature     * @returns {Array}
      */
     extractPopupData(feature, genomeId) {
 
@@ -503,6 +511,52 @@ class TrackBase {
         return (typeof this.color === "function") ? this.color(feature) : this.color
     }
 
+    numericDataMenuItems() {
+
+        const menuItems = []
+
+        menuItems.push('<hr/>')
+
+        // Data range
+        let object = $('<div>')
+        object.text('Set data range')
+
+        function dialogPresentationHandler() {
+
+            if (isMultiSelectedTrackView(this.trackView)) {
+                this.browser.dataRangeDialog.configure(getMultiSelectedTrackViews(this.trackView.browser))
+            } else {
+                this.browser.dataRangeDialog.configure(this.trackView)
+            }
+            this.browser.dataRangeDialog.present($(this.browser.columnContainer))
+        }
+        menuItems.push({ object, dialog:dialogPresentationHandler })
+
+        if (this.logScale !== undefined) {
+
+            object = $(createCheckbox("Log scale", this.logScale))
+
+            function logScaleHandler() {
+                this.logScale = !this.logScale
+                this.trackView.repaintViews()
+            }
+
+            menuItems.push({ object, click:logScaleHandler })
+        }
+
+        object = $(createCheckbox("Autoscale", this.autoscale))
+
+        function autoScaleHandler() {
+            this.autoscaleGroup = undefined
+            this.autoscale = !this.autoscale
+            this.browser.updateViews()
+        }
+
+        menuItems.push({ object, click:autoScaleHandler })
+
+        return menuItems
+    }
+
     /**
      * Track has been permanently removed.  Release resources and other cleanup
      */
@@ -528,6 +582,24 @@ class TrackBase {
         } else {
             return undefined
         }
+    }
+
+    static localFileInspection(config) {
+
+        const cooked = Object.assign({}, config)
+        const lut =
+            {
+                url: 'file',
+                indexURL: 'indexFile'
+            }
+
+        for (const key of ['url', 'indexURL']) {
+            if (cooked[key] && cooked[key] instanceof File) {
+                cooked[ lut[ key ] ] = cooked[key].name
+            }
+        }
+
+        return cooked
     }
 }
 

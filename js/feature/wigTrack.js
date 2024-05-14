@@ -1,28 +1,3 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2014 Broad Institute
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- */
-
 import FeatureSource from './featureSource.js'
 import TDFSource from "../tdf/tdfSource.js"
 import TrackBase from "../trackBase.js"
@@ -30,9 +5,11 @@ import BWSource from "../bigwig/bwSource.js"
 import IGVGraphics from "../igv-canvas.js"
 import paintAxis from "../util/paintAxis.js"
 import {IGVColor, StringUtils} from "../../node_modules/igv-utils/src/index.js"
-import MenuUtils from "../ui/menuUtils.js"
+import $ from "../vendor/jquery-3.3.1.slim.js"
+import {createCheckbox} from "../igv-icons.js"
 
 const DEFAULT_COLOR = 'rgb(150, 150, 150)'
+
 
 class WigTrack extends TrackBase {
 
@@ -42,9 +19,11 @@ class WigTrack extends TrackBase {
         logScale: false,
         windowFunction: 'mean',
         graphType: 'bar',
-        autoscale: true,
         normalize: undefined,
-        scaleFactor: undefined
+        scaleFactor: undefined,
+        overflowColor: `rgb(255, 32, 255)`,
+        baselineColor: 'lightGray',
+        summarize: true
     }
 
     constructor(config, browser) {
@@ -57,6 +36,7 @@ class WigTrack extends TrackBase {
 
         this.type = "wig"
         this.featureType = 'numeric'
+        this.resolutionAware = true
         this.paintAxis = paintAxis
 
         const format = config.format ? config.format.toLowerCase() : config.format
@@ -65,18 +45,15 @@ class WigTrack extends TrackBase {
             delete config.featureSource
         } else if ("bigwig" === format) {
             this.featureSource = new BWSource(config, this.browser.genome)
-            this.resolutionAware = true
         } else if ("tdf" === format) {
             this.featureSource = new TDFSource(config, this.browser.genome)
-            this.resolutionAware = true
         } else {
             this.featureSource = FeatureSource(config, this.browser.genome)
-            this.resolutionAware = false
         }
 
 
         // Override autoscale default
-        if(config.max === undefined || config.autoscale === true) {
+        if (config.max === undefined || config.autoscale === true) {
             this.autoscale = true
         } else {
             this.dataRange = {
@@ -93,13 +70,16 @@ class WigTrack extends TrackBase {
     }
 
     async getFeatures(chr, start, end, bpPerPixel) {
+
+        const windowFunction = this.windowFunction
+
         const features = await this.featureSource.getFeatures({
             chr,
             start,
             end,
             bpPerPixel,
             visibilityWindow: this.visibilityWindow,
-            windowFunction: this.windowFunction
+            windowFunction
         })
         if (this.normalize && this.featureSource.normalizationFactor) {
             const scaleFactor = this.featureSource.normalizationFactor
@@ -113,27 +93,60 @@ class WigTrack extends TrackBase {
                 f.value *= scaleFactor
             }
         }
-        return features
+
+        // Summarize features to current resolution.  This needs to be done here, rather than in the "draw" function,
+        // for group autoscale to work.
+        if ("all" !== chr && this.summarize && ("mean" === windowFunction || "min" === windowFunction || "max" === windowFunction)) {
+            return summarizeData(features, start, bpPerPixel, windowFunction)
+        } else {
+            return features
+        }
     }
 
     menuItemList() {
-        let items = []
+        const items = []
 
         if (this.flipAxis !== undefined) {
             items.push('<hr>')
-            items.push({
-                label: "Flip y-axis",
-                click: () => {
-                    this.flipAxis = !this.flipAxis
-                    this.trackView.repaintViews()
-                }
-            })
+
+            function click() {
+                this.flipAxis = !this.flipAxis
+                this.trackView.repaintViews()
+            }
+
+            items.push({label: 'Flip y-axis', click})
         }
 
-        items = items.concat(MenuUtils.numericDataMenuItems(this.trackView))
+        if(this.featureSource.windowFunctions) {
+            items.push(...this.wigSummarizationItems())
+        }
+
+        items.push(...this.numericDataMenuItems())
 
         return items
     }
+
+    wigSummarizationItems() {
+
+        const windowFunctions = this.featureSource.windowFunctions
+
+        const menuItems = []
+        menuItems.push('<hr/>')
+        menuItems.push("<div>Windowing function</div>")
+        for (const wf of windowFunctions) {
+            const object = $(createCheckbox(wf, this.windowFunction === wf))
+
+            function clickHandler() {
+                this.windowFunction = wf
+                this.trackView.updateViews()
+            }
+
+            menuItems.push({object, click: clickHandler})
+        }
+
+        return menuItems
+    }
+
 
     async getHeader() {
 
@@ -175,10 +188,6 @@ class WigTrack extends TrackBase {
         const bpEnd = bpStart + pixelWidth * bpPerPixel + 1
         const posColor = this.color || DEFAULT_COLOR
 
-        let baselineColor
-        if (typeof posColor === "string" && posColor.startsWith("rgb(")) {
-            baselineColor = IGVColor.addAlpha(posColor, 0.1)
-        }
         let lastNegValue = 1
         const scaleFactor = this.getScaleFactor(this.dataRange.min, this.dataRange.max, options.pixelHeight, this.logScale)
         const yScale = (yValue) => this.logScale
@@ -196,37 +205,51 @@ class WigTrack extends TrackBase {
                 let lastPixelEnd = -1
                 let lastY
                 const y0 = yScale(0)
+
                 for (let f of features) {
 
                     if (f.end < bpStart) continue
                     if (f.start > bpEnd) break
 
-                    const x = Math.floor((f.start - bpStart) / bpPerPixel)
+                    const x = (f.start - bpStart) / bpPerPixel
                     if (isNaN(x)) continue
 
                     let y = yScale(f.value)
 
-                    const rectEnd = Math.ceil((f.end - bpStart) / bpPerPixel)
-                    const width = Math.max(1, rectEnd - x)
+                    const rectEnd = (f.end - bpStart) / bpPerPixel
+                    const width = rectEnd - x
 
-                    const color = this.getColorForFeature(f)
+                    const color = options.alpha ? IGVColor.addAlpha(this.getColorForFeature(f), options.alpha) : this.getColorForFeature(f)
 
-                    if (this.graphType === "points") {
-                        const pointSize = this.config.pointSize || 3
-                        const px = x + width / 2
-                        IGVGraphics.fillCircle(ctx, px, y, pointSize / 2, {"fillStyle": color, "strokeStyle": color})
-
-                    } else if (this.graphType === "line") {
-                        if (lastY != undefined) {
+                    if (this.graphType === "line") {
+                        if (lastY !== undefined) {
                             IGVGraphics.strokeLine(ctx, lastPixelEnd, lastY, x, y, {
                                 "fillStyle": color,
                                 "strokeStyle": color
                             })
                         }
                         IGVGraphics.strokeLine(ctx, x, y, x + width, y, {"fillStyle": color, "strokeStyle": color})
+                    } else if (this.graphType === "points") {
+                        const pointSize = this.config.pointSize || 3
+                        const px = x + width / 2
+                        IGVGraphics.fillCircle(ctx, px, y, pointSize / 2, {"fillStyle": color, "strokeStyle": color})
+
+                        if (f.value > this.dataRange.max) {
+                            IGVGraphics.fillCircle(ctx, px, pointSize / 2, pointSize / 2, 3, {fillStyle: this.overflowColor})
+                        } else if (f.value < this.dataRange.min) {
+                            IGVGraphics.fillCircle(ctx, px, pixelHeight - pointSize / 2, pointSize / 2, 3, {fillStyle: this.overflowColor})
+                        }
+
                     } else {
-                        const height = y - y0
+
+                        const height = Math.min(pixelHeight, y - y0)
                         IGVGraphics.fillRect(ctx, x, y0, width, height, {fillStyle: color})
+
+                        if (f.value > this.dataRange.max) {
+                            IGVGraphics.fillRect(ctx, x, 0, width, 3, {fillStyle: this.overflowColor})
+                        } else if (f.value < this.dataRange.min) {
+                            IGVGraphics.fillRect(ctx, x, pixelHeight - 3, width, 3, {fillStyle: this.overflowColor})
+                        }
 
                     }
                     lastPixelEnd = x + width
@@ -235,8 +258,9 @@ class WigTrack extends TrackBase {
 
                 // If the track includes negative values draw a baseline
                 if (this.dataRange.min < 0) {
-                    const basepx = (this.dataRange.max / (this.dataRange.max - this.dataRange.min)) * options.pixelHeight
-                    IGVGraphics.strokeLine(ctx, 0, basepx, options.pixelWidth, basepx, {strokeStyle: baselineColor})
+                    const ratio = this.dataRange.max / (this.dataRange.max - this.dataRange.min)
+                    const basepx = this.flipAxis ? (1 - ratio) * options.pixelHeight : ratio * options.pixelHeight
+                    IGVGraphics.strokeLine(ctx, 0, basepx, options.pixelWidth, basepx, {strokeStyle: this.baselineColor})
                 }
             }
         }
@@ -287,12 +311,12 @@ class WigTrack extends TrackBase {
                         popupData.push('<hr/>')
                     }
                     let posString = (selectedFeature.end - selectedFeature.start) === 1 ?
-                        StringUtils.numberFormatter(selectedFeature.start + 1)
-                        : StringUtils.numberFormatter(selectedFeature.start + 1) + "-" + StringUtils.numberFormatter(selectedFeature.end)
+                        StringUtils.numberFormatter(Math.floor(selectedFeature.start) + 1)
+                        : StringUtils.numberFormatter(Math.floor(selectedFeature.start) + 1) + "-" + StringUtils.numberFormatter(Math.floor(selectedFeature.end))
                     popupData.push({name: "Position:", value: posString})
                     popupData.push({
                         name: "Value:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;",
-                        value: StringUtils.numberFormatter(selectedFeature.value)
+                        value: StringUtils.numberFormatter(selectedFeature.value.toFixed(4))
                     })
                 }
             }
@@ -331,5 +355,117 @@ class WigTrack extends TrackBase {
 
 }
 
+/**
+ * Summarize wig data in bins of size "bpPerPixel" with the given window function.
+ *
+ * @param features  wig (numeric) data -- features cannot overlap, and are in ascending order by start position
+ * @param startBP  bp start position for computing binned data
+ * @param bpPerPixel  bp per pixel (bin)
+ * @param windowFunction mean, min, or max
+ * @returns {*|*[]}
+ */
+function summarizeData(features, startBP, bpPerPixel, windowFunction = "mean") {
+
+    if (bpPerPixel <= 1 || !features || features.length === 0) {
+        return features
+    }
+
+    // Assume features are sorted by position.  Wig features cannot overlap.  Note, UCSC "reductionLevel" == bpPerPixel
+    const chr = features[0].chr
+    const binSize = bpPerPixel
+    const summaryFeatures = []
+
+    const finishBin = (bin) => {
+        const start = startBP + bin.bin * binSize
+        const end = start + binSize
+        let value
+        switch (windowFunction) {
+            case "mean":
+                value = bin.sumData / bin.count
+                break
+            case "max":
+                value = bin.max
+                break
+            case "min":
+                value = bin.min
+                break
+            default:
+                throw Error(`Unknown window function: ${windowFunction}`)
+        }
+        const description = `${windowFunction} of ${bin.count} values`
+        summaryFeatures.push({chr, start, end, value, description})
+    }
+
+    let currentBinData
+    for (let f of features) {
+
+        // Loop through bins this feature overlaps, updating the weighted sum for each bin or min/max,
+        // depending on window function
+        let startBin = Math.floor((f.start - startBP) / binSize)
+        const endBin = Math.floor((f.end - startBP) / binSize)
+
+        if (currentBinData && startBin === currentBinData.bin) {
+            currentBinData.add(f)
+            startBin++
+        }
+
+        if (!currentBinData || endBin > currentBinData.bin) {
+
+            if(currentBinData) {
+                finishBin(currentBinData)
+            }
+
+            // Feature stretches across multiple bins.
+            if (endBin > startBin) {
+                const end = startBP + endBin * binSize
+                summaryFeatures.push({chr, start: f.start, end, value: f.value})
+            }
+
+            currentBinData = new SummaryBinData(endBin, f)
+        }
+
+    }
+    if(currentBinData) {
+        finishBin(currentBinData)
+    }
+
+    // Consolidate
+    const c = []
+    let lastFeature = summaryFeatures[0]
+    for (let f of summaryFeatures) {
+        if (lastFeature.value === f.value && f.start <= lastFeature.end) {
+            lastFeature.end = f.end
+        } else {
+            c.push(lastFeature)
+            lastFeature = f
+        }
+    }
+    c.push(lastFeature)
+
+    return c
+
+}
+
+class SummaryBinData {
+    constructor(bin, feature) {
+        this.bin = bin
+        this.sumData = feature.value
+        this.count = 1
+        this.min = feature.value
+        this.max = feature.value
+    }
+
+    add(feature) {
+        this.sumData += feature.value
+        this.max = Math.max(feature.value, this.max)
+        this.min = Math.min(feature.value, this.min)
+        this.count++
+    }
+
+    get mean() {
+        return this.sumData / this.count
+    }
+}
 
 export default WigTrack
+export {summarizeData}

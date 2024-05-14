@@ -1,8 +1,8 @@
-import {StringUtils} from '../../node_modules/igv-utils/src/index.js'
-import {DOMUtils} from '../../node_modules/igv-ui/dist/igv-ui.js'
-import {appleCrayonRGB} from '../util/colorPalletes.js'
-import {emptySpaceReplacement} from "./sampleInfo.js";
-
+import * as DOMUtils from "../ui/utils/dom-utils.js"
+import {appleCrayonRGB, randomRGB, randomRGBConstantAlpha} from '../util/colorPalletes.js'
+import IGVGraphics from "../igv-canvas.js"
+import {attributeNamesMap, sampleDictionary} from "./sampleInfo.js"
+import {sampleInfoTileWidth, sampleInfoTileXShim} from "./sampleInfoConstants.js"
 
 const maxSampleNameViewportWidth = 200
 const fudgeTextMetricWidth = 4
@@ -56,19 +56,14 @@ class SampleNameViewport {
 
     checkCanvas() {
 
-        const dpi = window.devicePixelRatio
-        const requiredHeight = this.viewport.clientHeight
-        const requiredWidth = this.browser.sampleNameViewportWidth
+        const width = this.browser.sampleNameViewportWidth || 0
+        this.ctx.canvas.width = width * window.devicePixelRatio
+        this.ctx.canvas.style.width = `${width}px`
 
-        if (this.canvas.width !== requiredWidth * dpi || this.canvas.height !== requiredHeight * dpi) {
-            const canvas = this.canvas
-            canvas.width = requiredWidth * dpi
-            canvas.height = requiredHeight * dpi
-            canvas.style.width = `${requiredWidth}px`
-            canvas.style.height = `${requiredHeight}px`
-            this.ctx = this.canvas.getContext("2d")
-            this.ctx.scale(dpi, dpi)
-        }
+        this.ctx.canvas.height = this.viewport.clientHeight * window.devicePixelRatio
+        this.ctx.canvas.style.height = `${this.viewport.clientHeight}px`
+
+        this.ctx.scale(window.devicePixelRatio, window.devicePixelRatio)
 
     }
 
@@ -87,62 +82,53 @@ class SampleNameViewport {
         this.checkCanvas()
     }
 
-    show() {
-        this.viewport.style.display = 'block'
-    }
-
-    hide() {
-        this.viewport.style.display = 'none'
-    }
-
     async repaint(samples) {
 
-        if (true === this.browser.showSampleNames) {
-            this.checkCanvas()
-            this.draw({context: this.ctx, samples})
+        if (samples.names.length > 0) {
+            if (true === this.browser.showSampleNames) {
+                this.checkCanvas()
+                this.draw({context: this.ctx, samples})
 
-            if (undefined === this.browser.sampleNameViewportWidth) {
-                const lengths = samples.names.map(name => this.ctx.measureText(name).width)
-                this.browser.sampleNameViewportWidth = Math.min(maxSampleNameViewportWidth, fudgeTextMetricWidth + Math.ceil(Math.max(...lengths)))
-                this.browser.layoutChange()
+                if (undefined === this.browser.sampleNameViewportWidth) {
+                    const lengths = samples.names.map(name => this.ctx.measureText(name).width)
+                    this.browser.sampleNameViewportWidth = Math.min(maxSampleNameViewportWidth, fudgeTextMetricWidth + Math.ceil(Math.max(...lengths)))
+                    this.browser.layoutChange()
+                }
+
             }
-
         }
+
     }
 
     draw({context, samples}) {
 
-        if (!samples || samples.names.length === 0/* || samples.height < 1*/) {
-            return
-        }
+        IGVGraphics.fillRect(context, 0, 0, context.canvas.width, samples.height, { fillStyle: appleCrayonRGB('snow') })
 
-        configureFont(context, fontConfigureTemplate, samples.height)
-        const sampleNameXShim = 4
+        if (samples && samples.names.length > 0) {
+            const viewportHeight = this.viewport.getBoundingClientRect().height
 
-        context.clearRect(0, 0, context.canvas.width, context.canvas.height)
+            const tileHeight = samples.height
+            const shim = tileHeight - 2 <= 1 ? 0 : 1
 
-        context.fillStyle = appleCrayonRGB('lead')
+            let y = this.contentTop + samples.yOffset
+            this.hitList = {}
+            for (const sampleName of samples.names) {
 
-        const viewportHeight = this.viewport.getBoundingClientRect().height
-        let y = (samples.yOffset || 0) + this.contentTop    // contentTop will always be a negative number (top relative to viewport)
+                if (y > viewportHeight) {
+                    break
+                }
+                if (y + tileHeight > 0) {
+                    const x = 0
+                    const yy = y + shim
+                    const hh = tileHeight - (2 * shim)
+                    // IGVGraphics.fillRect(context, x, yy, context.canvas.width, hh, { fillStyle: randomRGB(100, 250) })
 
-        this.hitList = {}
-        for (let name of samples.names) {
-            if (y > viewportHeight) {
-                break
+                    drawTextInRect(context, sampleName, x + 2, yy, context.canvas.width, hh);
+                }
+
+                y += tileHeight
             }
-            if (y + samples.height > 0) {
-                const text = name
-                const yFont = getYFont(context, text, y, samples.height)
-                context.fillText(text, sampleNameXShim, yFont)
-
-                const key = `${Math.floor(sampleNameXShim)}#${Math.floor(y)}#${context.canvas.width}#${Math.ceil(samples.height)}`
-                this.hitList[key] = `${name}`
-
-            }
-            y += samples.height
         }
-
     }
 
     renderSVGContext(context, {deltaX, deltaY}) {
@@ -229,6 +215,15 @@ class SampleNameViewport {
         this.removeMouseHandlers()
         this.viewport.remove()
     }
+
+    show() {
+        this.viewport.style.display = 'block'
+    }
+
+    hide() {
+        this.viewport.style.display = 'none'
+    }
+
 }
 
 function getYFont(context, text, y, height) {
@@ -247,6 +242,22 @@ function configureFont(ctx, {textAlign, textBaseline, strokeStyle, fillStyle}, s
     ctx.textAlign = textAlign
     ctx.textBaseline = textBaseline
     ctx.fillStyle = fillStyle
+}
+
+function drawTextInRect(context, text, x, y, width, height) {
+
+    const pixels = Math.min(height, maxFontSize)
+    context.font = `${pixels}px sans-serif`
+    context.textAlign = 'start'
+    context.fillStyle = appleCrayonRGB('lead')
+
+    const textX = x
+
+    const metrics = context.measureText(text)
+    const textHeight = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent
+    const textY = y + height / 2 + textHeight / 2
+
+    context.fillText(text, textX, textY)
 }
 
 export default SampleNameViewport

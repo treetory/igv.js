@@ -1,5 +1,27 @@
 import {IGVMath} from "../../node_modules/igv-utils/src/index.js"
 
+function hexToRGB(hex) {
+    // Ensure the hex value is in the proper format
+    hex = hex.replace(/^#/, '');
+
+    // If it's a shorthand hex color (like #f06), double each character
+    if (hex.length === 3) {
+        hex = hex.split('').map(char => char + char).join('');
+    }
+
+    if (hex.length !== 6) {
+        throw new Error('Invalid HEX color.');
+    }
+
+    // Parse the r, g, b values
+    let bigint = parseInt(hex, 16);
+    let r = (bigint >> 16) & 255;
+    let g = (bigint >> 8) & 255;
+    let b = bigint & 255;
+
+    return `rgb(${r}, ${g}, ${b})`;
+}
+
 const appleCrayonPalette =
     {
         licorice: "#000000",
@@ -117,6 +139,41 @@ function appleCrayonRGBA(name, alpha) {
     return `rgba(${r},${g},${b},${alpha})`
 }
 
+const webColorRGBPalette =
+    {
+        white: 'rgb(255, 255, 255)',
+        silver: 'rgb(192, 192, 192)',
+        grey: 'rgb(128, 128, 128)',
+        black: 'rgb(0, 0, 0)',
+        red: 'rgb(255, 0, 0)',
+        maroon: 'rgb(128, 0, 0)',
+        yellow: 'rgb(255, 255, 0)',
+        olive: 'rgb(128, 128, 0)',
+        lime: 'rgb(0, 255, 0)',
+        green: 'rgb(0, 128, 0)',
+        aqua: 'rgb(0, 255, 255)',
+        teal: 'rgb(0, 128, 128)',
+        blue: 'rgb(0, 0, 255)',
+        navy: 'rgb(0, 0, 128)',
+        fuchsia: 'rgb(255, 0, 255)',
+        purple: 'rgb(128, 0, 128)',
+    }
+
+function isValidColorName(name) {
+    const a = new Set(Object.keys(webColorRGBPalette))
+    const b = new Set(Object.keys(appleCrayonPalette))
+    return a.has(name) || b.has(name)
+}
+
+function getColorNameRGBString(name) {
+
+    if (isValidColorName(name)) {
+         return webColorRGBPalette[ name ] || appleCrayonRGB(name)
+    } else {
+        return undefined
+    }
+}
+
 const colorPalettes = {
 
     Set1:
@@ -212,21 +269,21 @@ class PaletteColorTable {
     constructor(palette) {
         this.colors = colorPalettes[palette]
         if (!Array.isArray(this.colors)) this.colors = []
-        this.colorTable = {}
+        this.colorTable = new Map()
         this.nextIdx = 0
         this.colorGenerator = new RandomColorGenerator()
     }
 
     getColor(key) {
-        if (!this.colorTable.hasOwnProperty(key)) {
+        if (!this.colorTable.has(key)) {
             if (this.nextIdx < this.colors.length) {
-                this.colorTable[key] = this.colors[this.nextIdx]
+                this.colorTable.set(key, this.colors[this.nextIdx])
             } else {
-                this.colorTable[key] = this.colorGenerator.get()
+                this.colorTable.set(key, this.colorGenerator.get())
             }
             this.nextIdx++
         }
-        return this.colorTable[key]
+        return this.colorTable.get(key)
     }
 }
 
@@ -466,9 +523,12 @@ function rgbStringHeatMapLerp(_a, _b, interpolant) {
 }
 
 export {
+    colorPalettes,
     appleCrayonRGB,
     appleCrayonRGBA,
     appleCrayonPalette,
+    isValidColorName,
+    getColorNameRGBString,
     ColorTable,
     PaletteColorTable,
     randomColor,
@@ -481,5 +541,6 @@ export {
     rgbaStringTokens,
     rgbStringTokens,
     rgbStringLerp,
-    rgbStringHeatMapLerp
+    rgbStringHeatMapLerp,
+    hexToRGB
 }

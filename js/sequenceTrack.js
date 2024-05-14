@@ -24,9 +24,9 @@
  */
 
 import IGVGraphics from "./igv-canvas.js"
-import {isSecureContext} from "./util/igvUtils.js"
+import {expandRegion, isSecureContext} from "./util/igvUtils.js"
 import {reverseComplementSequence} from "./util/sequenceUtils.js"
-import {loadFasta} from "./genome/fasta.js"
+import {loadSequence} from "./genome/fasta.js"
 import {defaultNucleotideColors} from "./util/nucleotideColors.js";
 
 const defaultSequenceTrackOrder = Number.MIN_SAFE_INTEGER
@@ -113,16 +113,17 @@ const FRAME_HEIGHT = 25
 const FRAME_BORDER = 5
 const BP_PER_PIXEL_THRESHOLD = 1 / 10
 
-const bppFeatureFetchThreshold = 10
+const bppSequenceThreshold = 10
 
 class SequenceTrack {
+
 
     constructor(config, browser) {
 
         this.config = config
         this.browser = browser
         this.type = "sequence"
-        this.removable = config.removable === undefined ? true : config.removable      // Defaults to true
+        this.removable = config.removable === true  // defaults to false
         this.name = config.name
         this.id = config.id
         this.sequenceType = config.sequenceType || "dna"             //   dna | rna | prot
@@ -189,7 +190,7 @@ class SequenceTrack {
                 {
                     label: this.reversed ? 'View visible sequence (reversed)...' : 'View visible sequence...',
                     click: async () => {
-                        let seq = await this.browser.genome.sequence.getSequence(chr, start, end)
+                        let seq = await this.browser.genome.getSequence(chr, start, end)
                         if (!seq) {
                             seq = "Unknown sequence"
                         } else if (this.reversed) {
@@ -203,7 +204,7 @@ class SequenceTrack {
                 items.push({
                     label: 'Copy visible sequence',
                     click: async () => {
-                        let seq = await this.browser.genome.sequence.getSequence(chr, start, end)
+                        let seq = await this.browser.genome.getSequence(chr, start, end)
                         if (!seq) {
                             seq = "Unknown sequence"
                         } else if (this.reversed) {
@@ -266,7 +267,7 @@ class SequenceTrack {
             }
             return this.fasta
         } else {
-            return this.browser.genome.sequence
+            return this.browser.genome
         }
     }
 
@@ -275,10 +276,11 @@ class SequenceTrack {
         start = Math.floor(start)
         end = Math.floor(end)
 
-        if (bpPerPixel && bpPerPixel > bppFeatureFetchThreshold) {
+        if (bpPerPixel && bpPerPixel > bppSequenceThreshold) {
             return null
         } else {
             const sequenceSource = await this.getSequenceSource()
+            //const extent = expandRegion(start, end, 1e5)
             const sequence = await sequenceSource.getSequence(chr, start, end)
             return {
                 bpStart: start,
@@ -441,7 +443,7 @@ class WrappedFasta {
     }
 
     async init() {
-        this.fasta = await loadFasta(this.config)
+        this.fasta = await loadSequence(this.config)
         this.chrNameMap = new Map()
         for(let name of this.fasta.chromosomeNames) {
             this.chrNameMap.set(this.genome.getChromosomeName(name), name)
@@ -455,7 +457,7 @@ class WrappedFasta {
 
 }
 
-export {defaultSequenceTrackOrder, bppFeatureFetchThreshold}
+export {defaultSequenceTrackOrder, bppSequenceThreshold, translationDict }
 
 export default SequenceTrack
 

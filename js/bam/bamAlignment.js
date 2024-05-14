@@ -1,31 +1,8 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2014 Broad Institute
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- */
-
 
 import {StringUtils} from "../../node_modules/igv-utils/src/index.js"
 import {createSupplementaryAlignments} from "./supplementaryAlignment.js"
+import {getBaseModificationSets} from "./mods/baseModificationUtils.js"
+
 
 const READ_PAIRED_FLAG = 0x1
 const PROPER_PAIR_FLAG = 0x2
@@ -113,7 +90,7 @@ class BamAlignment {
     isNegativeStrand() {
         return (this.flags & READ_STRAND_FLAG) !== 0
     }
-
+    
     isMateNegativeStrand() {
         return (this.flags & MATE_STRAND_FLAG) !== 0
     }
@@ -134,6 +111,23 @@ class BamAlignment {
         }
         return this.tagDict
     }
+
+
+    /**
+     * @returns a boolean indicating strand of first in pair, true for forward, false for reverse, and undefined
+     * if this is not paired or is not first and mate is not mapped.
+     */
+    get firstOfPairStrand() {
+        if (this.isPaired()) {
+            if (this.isFirstOfPair()) {
+                return this.strand
+            } else if (this.isMateMapped()) {
+                return this.mate.strand
+            }
+        }
+        return undefined
+    }
+
 
     /**
      * Does alignment (or alignment extended by soft clips) contain the genomic location?
@@ -308,21 +302,43 @@ class BamAlignment {
         let left
         let right
         let interiorSeen
-        for(let b of this.blocks) {
-            if('S' === b.type) {
-                if(interiorSeen) {
+        for (let b of this.blocks) {
+            if ('S' === b.type) {
+                if (interiorSeen) {
                     right = b
                 } else {
                     left = b
                 }
-            } else if('H' !== b.type) {
+            } else if ('H' !== b.type) {
                 interiorSeen = true
             }
         }
         return {left, right}
     }
 
+    getBaseModificationSets() {
+        this.tags()
+        if (!this.baseModificationSets && (this.tagDict["MM"] || this.tagDict["Mm"])) {
+
+            const mm = this.tagDict["MM"] || this.tagDict["Mm"]
+            const ml = this.tagDict["ML"] || this.tagDict["Ml"]
+
+            if (StringUtils.isString(mm) && (!ml || Array.isArray(ml))) { // minimal validation, 10X uses these reserved tags for something completely different
+                if (mm.length === 0) {
+                    this.baseModificationSets = EMPTY_SET
+                } else {
+                    //getBaseModificationSets(mm, ml, sequence, isNegativeStrand)
+                    this.baseModificationSets = getBaseModificationSets(mm, ml, this.seq, this.isNegativeStrand())
+                }
+                //}
+            }
+        }
+        return this.baseModificationSets
+    }
+
 }
+
+const EMPTY_SET = new Set()
 
 function blockAtGenomicLocation(blocks, genomicLocation) {
 
@@ -376,6 +392,7 @@ function decodeTags(ba) {
                 }
             }
         } else if (type === 'B') {
+            //‘cCsSiIf’, corresponding to int8 , uint8 t, int16 t, uint16 t, int32 t, uint32 t and float
             const elementType = String.fromCharCode(ba[p++])
             let elementSize = ELEMENT_SIZE[elementType]
             if (elementSize === undefined) {
@@ -383,8 +400,35 @@ function decodeTags(ba) {
                 break
             }
             const numElements = readInt(ba, p)
-            p += (4 + numElements * elementSize)
-            value = '[not shown]'
+            p += 4
+            const pEnd = p + numElements * elementSize
+            value = []
+            const dataView = new DataView(ba.buffer)
+            while (p < pEnd) {
+                switch (elementType) {
+                    case 'c':
+                        value.push(dataView.getInt8(p))
+                        break
+                    case 'C':
+                        value.push(dataView.getUint8(p))
+                        break
+                    case 's':
+                        value.push(dataView.getInt16(p))
+                        break
+                    case 'S':
+                        value.push(dataView.getUint16(p))
+                        break
+                    case 'i':
+                        value.push(dataView.getInt32(p))
+                        break
+                    case 'I':
+                        value.push(dataView.getUint32(p))
+                        break
+                    case 'f':
+                        value.push(dataView.getFloat32(p))
+                }
+                p += elementSize
+            }
         } else {
             //'Unknown type ' + type;
             value = 'Error unknown type: ' + type

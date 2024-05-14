@@ -24,7 +24,7 @@
  * THE SOFTWARE.
  */
 
-import {DOMUtils} from '../../node_modules/igv-ui/dist/igv-ui.js'
+import * as DOMUtils from "../ui/utils/dom-utils.js"
 
 class ViewportCenterLine {
 
@@ -37,7 +37,7 @@ class ViewportCenterLine {
         this.container = DOMUtils.div({class: 'igv-center-line'})
         column.appendChild(this.container)
 
-        if (browser.isCenterLineVisible) {
+        if (browser.doShowCenterLine) {
             this.show()
         } else {
             this.hide()

@@ -25,7 +25,8 @@
 
 import {GoogleAuth, igvxhr} from '../node_modules/igv-utils/src/index.js'
 import Browser from "./browser.js"
-import GenomeUtils from "./genome/genome.js"
+import GenomeUtils from "./genome/genomeUtils.js"
+import {navbarDidResize} from "./responsiveNavbar.js"
 
 let allBrowsers = []
 
@@ -68,8 +69,10 @@ async function createBrowser(parentDiv, config) {
     const browser = new Browser(config, parentDiv)
     allBrowsers.push(browser)
 
-    // Load initial session
-    const sessionURL = config.sessionURL || config.session
+    // Lod initial sessio
+    browser.startSpinner()
+
+    const sessionURL = config.sessionURL || config.session || config.hubURL
     if (sessionURL) {
         await browser.loadSession({
             url: sessionURL
@@ -78,7 +81,8 @@ async function createBrowser(parentDiv, config) {
         await browser.loadSessionObject(config)
     }
 
-    browser.navbarManager.navbarDidResize(browser.$navigation.width())
+    browser.stopSpinner()
+    navbarDidResize(browser, browser.$navigation.width())
 
     return browser
 
@@ -99,7 +103,7 @@ function removeAllBrowsers() {
 }
 
 function getAllBrowsers() {
-    return allBrowsers;
+    return allBrowsers
 }
 
 /**
@@ -138,8 +142,8 @@ function setDefaults(config) {
         config.showTrackLabels = true
     }
 
-    if (undefined === config.showROITableButton) {
-        config.showROITableButton = false
+    if (undefined === config.doShowROITableButton) {
+        config.doShowROITableButton = false
     }
 
     if (undefined === config.showROITable) {
@@ -149,7 +153,6 @@ function setDefaults(config) {
     if (undefined === config.showCursorTrackingGuideButton) {
         config.showCursorTrackingGuideButton = true
     }
-
 
     if (undefined === config.showCursorGuide) {
         config.showCursorGuide = config.showCursorTrackingGuide || false   // showCursorTrackingGuide is a synonym
@@ -195,6 +198,8 @@ function setDefaults(config) {
         config.tracks = []
     }
 
+    return config
+
 }
 
 
@@ -233,24 +238,31 @@ function extractQuery(config) {
                 } else if ('name' === key) {
                     // IGV desktop style index parameter
                     names = value.split(',')
-                } else if ('genome' === key && ((value.startsWith("https://") || value.startsWith("http://")) && !value.endsWith(".json"))) {
-                    // IGV desktop compatibility -- assuming url to fasta
-                    config['reference'] = {
-                        fastaURL: value,
-                        indexURL: value + ".fai"
+                } else if ('genome' === key) {
+                    if ((value.startsWith("https://") || value.startsWith("http://")) && !value.endsWith(".json")) {
+                        // IGV desktop compatibility -- assuming url to fasta
+                        config['reference'] = {
+                            fastaURL: value,
+                            indexURL: value + ".fai"
+                        }
+                    } else {
+                        config[key] = value
+                        config['reference'] = undefined
                     }
                 } else {
+                    if ('reference' === key) {
+                        config['genome'] = undefined   // Can specify either reference or genome, not both
+                    }
                     config[key] = value
                 }
                 i = j + 1
             } else {
-                i++;
+                i++
             }
         }
     }
 
     if (files) {
-
         if (!config.tracks)
             config.tracks = []
         for (let i = 0; i < files.length; i++) {
@@ -279,4 +291,4 @@ async function createTrack(config, browser) {
     return await Browser.prototype.createTrack.call(browser, config)
 }
 
-export {createTrack, createBrowser, removeBrowser, removeAllBrowsers, getAllBrowsers, visibilityChange}
+export {createTrack, createBrowser, removeBrowser, removeAllBrowsers, getAllBrowsers, visibilityChange, setDefaults}

@@ -24,7 +24,8 @@
  */
 
 import $ from "./vendor/jquery-3.3.1.slim.js"
-import {DOMUtils, AlertDialog} from '../node_modules/igv-ui/dist/igv-ui.js'
+import * as DOMUtils from "./ui/utils/dom-utils.js"
+import AlertDialog from "./ui/components/alertDialog.js"
 import SequenceTrack from "./sequenceTrack.js"
 
 class Viewport {
@@ -119,7 +120,10 @@ class Viewport {
 
     }
 
-    async repaint() {
+    /**
+     * Force a repaint.  Implementations provided by subclasses.
+     */
+    repaint() {
     }
 
     draw(drawConfiguration, features, roiFeatures) {
@@ -191,10 +195,6 @@ class Viewport {
      * Called when the associated track is removed.  Do any needed cleanup here.
      */
     dispose() {
-
-        if (this.popover) {
-            this.popover.dispose()
-        }
 
         this.$viewport.get(0).remove()
 

@@ -6,9 +6,10 @@ import {IGVMath} from "../../node_modules/igv-utils/src/index.js"
 import {createCheckbox} from "../igv-icons.js"
 import {GradientColorScale} from "../util/colorScale.js"
 import {ColorTable, randomRGB} from "../util/colorPalletes.js"
-import {emptySpaceReplacement, sampleDictionary} from "../sample/sampleInfo.js";
+import {attributeNames, emptySpaceReplacement, sampleDictionary} from "../sample/sampleInfo.js";
 import HicColorScale from "../hic/hicColorScale.js"
 import ShoeboxSource from "../hic/shoeboxSource.js"
+import {sortBySampleName} from "../sample/sampleUtils.js"
 
 
 class SegTrack extends TrackBase {
@@ -100,13 +101,30 @@ class SegTrack extends TrackBase {
         const menuItems = []
 
         menuItems.push('<hr/>')
-        menuItems.push(sortBySampleName(this.trackView))
+        menuItems.push(sortBySampleName())
 
         if (sampleDictionary) {
             menuItems.push('<hr/>')
             menuItems.push("Sort by attribute:")
-            for (const attribute of this.browser.sampleInfo.getAttributeNames()) {
-                menuItems.push(sortByAttribute(this.trackView, attribute))
+            for (const attribute of attributeNames) {
+
+                const sampleNames = this.sampleKeys.map(key => this.sampleNames.get(key))
+                if(sampleNames.some(s => {
+                    const attrs = this.browser.sampleInfo.getAttributes(s)
+                    return attrs && attrs[attribute]
+                })) {
+
+                    const object = $('<div>')
+                    object.html(`&nbsp;&nbsp;${attribute.split(emptySpaceReplacement).join(' ')}`)
+
+                    function attributeSort() {
+                        this.sampleKeys = this.browser.sampleInfo.getSortedSampleKeysByAttribute(this.sampleKeys, attribute, this.trackView.sampleInfoViewport.sortDirection)
+                        this.trackView.repaintViews()
+                        this.trackView.sampleInfoViewport.sortDirection *= -1
+                    }
+
+                    menuItems.push({object, click: attributeSort})
+                }
             }
         }
 
@@ -119,23 +137,22 @@ class SegTrack extends TrackBase {
 
         if (this.type === 'shoebox' && this.sbColorScale) {
             menuItems.push('<hr/>')
-            menuItems.push({
-                object: $('<div>Set color scale threshold</div>'),
-                click: e => {
-                    this.browser.inputDialog.present({
-                        label: 'Color Scale Threshold',
-                        value: this.sbColorScale.threshold,
-                        callback: () => {
-                            const t = Number(this.browser.inputDialog.input.value, 10)
-                            if(t) {
-                                this.sbColorScale.setThreshold(t)
-                                this.trackView.repaintViews()
-                            }
-                        }
-                    }, e)
-                }
 
-            })
+            function dialogPresentationHandler(e) {
+                this.browser.inputDialog.present({
+                    label: 'Color Scale Threshold',
+                    value: this.sbColorScale.threshold,
+                    callback: () => {
+                        const t = Number(this.browser.inputDialog.value, 10)
+                        if(t) {
+                            this.sbColorScale.setThreshold(t)
+                            this.trackView.repaintViews()
+                        }
+                    }
+                }, e)
+            }
+
+            menuItems.push({ object: $('<div>Set color scale threshold</div>'), dialog: dialogPresentationHandler })
         }
 
         menuItems.push('<hr/>')
@@ -146,7 +163,7 @@ class SegTrack extends TrackBase {
             menuItems.push(
                 {
                     object: $(checkBox),
-                    click: () => {
+                    click: function displayModeHandler() {
                         this.displayMode = displayMode
                         this.config.displayMode = displayMode
                         this.trackView.checkContentHeight()
@@ -525,38 +542,6 @@ class SegTrack extends TrackBase {
         }
     }
 }
-
-
-function sortBySampleName(trackView) {
-
-    const object = $('<div>')
-    object.text('Sort by sample names')
-
-    const click = () => {
-        trackView.track.sampleKeys.sort((a, b) => trackView.sampleNameViewport.sortDirection * a.localeCompare(b))
-        trackView.repaintViews()
-        trackView.sampleNameViewport.sortDirection *= -1
-    }
-
-    return { object, click }
-
-}
-
-function sortByAttribute(trackView, attribute) {
-
-    const object = $('<div>')
-    object.html(`&nbsp;&nbsp;${ attribute.split(emptySpaceReplacement).join(' ') }`)
-
-    const click = () => {
-        trackView.track.sampleKeys = trackView.browser.sampleInfo.getSortedSampleKeysByAttribute(trackView.track.sampleKeys, attribute, trackView.sampleInfoViewport.sortDirection)
-        trackView.repaintViews()
-        trackView.sampleInfoViewport.sortDirection *= -1
-    }
-
-    return { object, click }
-
-}
-
 
 // Default copy number scales
 const POS_COLOR_SCALE = {low: 0.1, lowR: 255, lowG: 255, lowB: 255, high: 1.5, highR: 255, highG: 0, highB: 0}

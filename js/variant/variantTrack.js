@@ -30,8 +30,11 @@ import TrackBase from "../trackBase.js"
 import IGVGraphics from "../igv-canvas.js"
 import {createCheckbox} from "../igv-icons.js"
 import {ColorTable, PaletteColorTable} from "../util/colorPalletes.js"
+import {attributeNames, emptySpaceReplacement, sampleDictionary} from "../sample/sampleInfo.js";
 import {makeVCFChords, sendChords} from "../jbrowse/circularViewUtils.js"
-import {FileUtils, StringUtils} from "../../node_modules/igv-utils/src/index.js"
+import {FileUtils, StringUtils, IGVColor} from "../../node_modules/igv-utils/src/index.js"
+import CNVPytorTrack from "../cnvpytor/cnvpytorTrack.js"
+import {sortBySampleName} from "../sample/sampleUtils.js"
 
 const isString = StringUtils.isString
 
@@ -93,6 +96,18 @@ class VariantTrack extends TrackBase {
         // The number of variant rows are computed dynamically, but start with "1" by default
         this.variantRowCount(1)
 
+        // Explicitly set samples -- used to select a subset of samples from a dataset
+        this.sampleKeys = []
+        this.sampleNames = new Map()
+        if (config.samples) {
+            // Explicit setting, keys == names
+            for (let s of config.samples) {
+                this.sampleKeys.push(s)
+                this.sampleNames.set(s, s)
+            }
+            this.explicitSamples = true
+        }
+
     }
 
     async postInit() {
@@ -114,7 +129,7 @@ class VariantTrack extends TrackBase {
     }
 
     get supportsWholeGenome() {
-        return this.config.indexed === false || this.config.supportsWholeGenome === true
+        return !this.config.indexURL  || this.config.supportsWholeGenome === true
     }
 
     get color() {
@@ -159,10 +174,20 @@ class VariantTrack extends TrackBase {
     }
 
     getSamples() {
+
+        const vGap = ("SQUISHED" === this.displayMode) ? this.squishedVGap : this.expandedVGap
+        const nVariantRows = "COLLAPSED" === this.displayMode ? 1 : this.nVariantRows
+        const variantHeight =  ("SQUISHED" === this.displayMode) ? this.squishedVariantHeight : this.expandedVariantHeight
+        const callHeight =  ("SQUISHED" === this.displayMode ? this.squishedCallHeight : this.expandedCallHeight)
+        const height = nVariantRows * (callHeight + vGap)
+
+        // Y Offset at which samples begin
+        const yOffset = TOP_MARGIN + nVariantRows * (variantHeight + vGap)
+
         return {
-            yOffset: this.sampleYOffset,
             names: this.sampleNames,
-            height: this.sampleHeight
+            yOffset,
+            height
         }
     }
 
@@ -175,7 +200,7 @@ class VariantTrack extends TrackBase {
      */
     computePixelHeight(features) {
 
-        if (!features || features.length == 0) return TOP_MARGIN
+        if (!features || 0 === features.length) return TOP_MARGIN
 
         const nVariantRows = (this.displayMode === "COLLAPSED") ? 1 : this.nVariantRows
         const vGap = (this.displayMode === "SQUISHED") ? this.squishedVGap : this.expandedVGap
@@ -337,6 +362,11 @@ class VariantTrack extends TrackBase {
         } else {
             variantColor = this.color
         }
+
+        if(v.isFiltered()) {
+            variantColor = IGVColor.addAlpha(variantColor, 0.2)
+        }
+
         return variantColor
     }
 
@@ -560,15 +590,46 @@ class VariantTrack extends TrackBase {
             }
         }
 
+        menuItems.push(sortBySampleName())
+        menuItems.push('<hr/>')
+
+        if (sampleDictionary) {
+
+            menuItems.push("Sort by attribute:")
+            for (const attribute of attributeNames) {
+
+                if(this.sampleNames.some(s => {
+                    const attrs = this.browser.sampleInfo.getAttributes(s)
+                    return attrs && attrs[attribute]
+                })) {
+
+
+                    const object = $('<div>')
+                    object.html(`&nbsp;&nbsp;${attribute.split(emptySpaceReplacement).join(' ')}`)
+
+                    function attributeSort() {
+                        this.sampleNames = this.browser.sampleInfo.getSortedSampleKeysByAttribute(this.sampleNames, attribute, this.trackView.sampleInfoViewport.sortDirection)
+                        this.trackView.repaintViews()
+                        this.trackView.sampleInfoViewport.sortDirection *= -1
+                    }
+
+                    menuItems.push({object, click: attributeSort})
+                }
+            }
+        }
+
+        menuItems.push('<hr/>')
+
         if (this.getCallsetsLength() > 0) {
             menuItems.push({object: $('<div class="igv-track-menu-border-top">')})
             menuItems.push({
                 object: $(createCheckbox("Show Genotypes", this.showGenotypes)),
-                click: () => {
+                click: function showGenotypesHandler() {
                     this.showGenotypes = !this.showGenotypes
-                    //adjustTrackHeight();
                     this.trackView.checkContentHeight()
                     this.trackView.repaintViews()
+                    this.browser.sampleNameControl.performClickWithState(this.browser, this.showGenotypes)
+                    this.browser.sampleInfoControl.performClickWithState(this.browser, this.showGenotypes)
                 }
             })
         }
@@ -585,7 +646,7 @@ class VariantTrack extends TrackBase {
             menuItems.push(
                 {
                     object: $(createCheckbox(lut[displayMode], displayMode === this.displayMode)),
-                    click: () => {
+                    click: function displayModeHandler() {
                         this.displayMode = displayMode
                         this.trackView.checkContentHeight()
                         this.trackView.repaintViews()
@@ -599,11 +660,22 @@ class VariantTrack extends TrackBase {
             menuItems.push('<hr>')
             menuItems.push({
                 label: 'Add SVs to circular view',
-                click: () => {
+                click: function circularViewHandler() {
                     const inView = []
                     for (let viewport of this.trackView.viewports) {
                         this.sendChordsForViewport(viewport)
                     }
+                }
+            })
+        }
+
+        // Experimental CNVPytor support
+        if (this.canCovertToPytor()) {
+            menuItems.push('<hr>')
+            menuItems.push({
+                label: 'Convert to CNVpytor track',
+                click: function cnvPytorHandler () {
+                    this.convertToPytor()
                 }
             })
         }
@@ -657,7 +729,7 @@ class VariantTrack extends TrackBase {
     colorByCB(menuItem, showCheck) {
 
         const $e = $(createCheckbox(menuItem.label, showCheck))
-        const clickHandler = () => {
+        function clickHandler() {
 
             if (menuItem.key === this.colorBy) {
                 this.colorBy = undefined
@@ -702,6 +774,69 @@ class VariantTrack extends TrackBase {
             this.colorTables.set(key, tbl)
         }
         return this.colorTables.get(key)
+    }
+
+    ///////////// CNVPytor converstion support follows ////////////////////////////////////////////////////////////
+
+    /**
+     * This do-nothing method is neccessary to allow conversion to a CNVPytor track, which needs dom elements for an
+     *     // axis.  The dom elements are created as a side effect of this function being defined
+     */
+    paintAxis() {
+    }
+
+    /**
+     * Check conditions for pytor track
+     * (1) 1 and only 1 genotype (callset)
+     * (2) DP info field
+     * (3) AD info field
+     * (4) Not indexed -- must read entire file
+     */
+    canCovertToPytor() {
+
+        if(this.config.indexURL) {
+            return false;
+        }
+        if(this.header) {
+            return Object.keys(this.header.callSets).length === 1 &&
+                this.header.FORMAT &&
+                this.header.FORMAT.AD &&
+                this.header.FORMAT.DP
+        } else {
+            // Cant know until header is read
+            return false
+        }
+    }
+
+    async convertToPytor() {
+
+        // Store state in case track is reverted
+        this.variantState = { ...this.config, ...this.getState() };
+        this.variantState.trackHeight = this.height
+
+
+        this.trackView.startSpinner()
+        // The timeout is neccessary to give the spinner time to start.
+        setTimeout(async () => {
+            try {
+                const newConfig = Object.assign({}, this.config)
+                Object.setPrototypeOf(this, CNVPytorTrack.prototype)
+
+                this.init(newConfig)
+                await this.postInit()
+
+                this.trackView.clearCachedFeatures()
+                this.trackView.setTrackHeight(this.config.height || CNVPytorTrack.DEFAULT_TRACK_HEIGHT)
+                this.trackView.checkContentHeight()
+                this.trackView.updateViews()
+                this.trackView.track.autoHeight = false
+
+
+            } finally {
+                this.trackView.stopSpinner()
+            }
+        }, 100)
+
     }
 }
 

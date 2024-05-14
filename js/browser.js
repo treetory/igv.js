@@ -1,7 +1,11 @@
 import $ from "./vendor/jquery-3.3.1.slim.js"
-import {InputDialog, GenericColorPicker} from '../node_modules/igv-ui/dist/igv-ui.js'
+import html2canvas from '../node_modules/html2canvas/dist/html2canvas.esm.js'
 import {BGZip, FileUtils, igvxhr, StringUtils, URIUtils} from "../node_modules/igv-utils/src/index.js"
-import {DOMUtils, Icon} from "../node_modules/igv-ui/dist/igv-ui.js"
+import * as DOMUtils from "./ui/utils/dom-utils.js"
+import {createIcon} from "./ui/utils/icons.js"
+import SliderDialog from "./ui/components/sliderDialog.js"
+import InputDialog from "./ui/components/inputDialog.js"
+import GenericColorPicker from "./ui/components/genericColorPicker.js"
 import Alert from './ui/alert.js'
 import * as TrackUtils from './util/trackUtils.js'
 import TrackView, {igv_axis_column_width} from "./trackView.js"
@@ -9,8 +13,7 @@ import C2S from "./canvas2svg.js"
 import {getTrack} from "./trackFactory.js"
 import ROISet from "./roi/ROISet.js"
 import XMLSession from "./session/igvXmlSession.js"
-import GenomeUtils from "./genome/genome.js"
-import loadPlinkFile from "./sample/sampleInformation.js"
+import GenomeUtils from "./genome/genomeUtils.js"
 import ReferenceFrame, {createReferenceFrameList} from "./referenceFrame.js"
 import {createColumn, doAutoscale, getElementAbsoluteHeight, getFilename} from "./util/igvUtils.js"
 import {createViewport} from "./util/viewportUtils.js"
@@ -20,19 +23,19 @@ import version from "./version.js"
 import FeatureSource from "./feature/featureSource.js"
 import {defaultNucleotideColors} from "./util/nucleotideColors.js"
 import search from "./search.js"
-import NavbarManager from "./navbarManager.js"
+import {navbarDidResize} from "./responsiveNavbar.js"
 import ChromosomeSelectWidget from "./ui/chromosomeSelectWidget.js"
 import WindowSizePanel from "./windowSizePanel.js"
 import CursorGuide from "./ui/cursorGuide.js"
 import CursorGuideButton from "./ui/cursorGuideButton.js"
 import CenterLineButton from './ui/centerLineButton.js'
 import TrackLabelControl from "./ui/trackLabelControl.js"
-import SampleNameControl from "./ui/sampleNameControl.js"
+import SampleNameControl from "./sample/sampleNameControl.js"
 import SampleInfoControl from "./sample/sampleInfoControl.js"
 import ZoomWidget from "./ui/zoomWidget.js"
 import DataRangeDialog from "./ui/dataRangeDialog.js"
 import HtsgetReader from "./htsget/htsgetReader.js"
-import SVGSaveControl from "./ui/svgSaveControl.js"
+import SaveImageControl from "./ui/saveImageControl.js"
 import MenuPopup from "./ui/menuPopup.js"
 import {viewportColumnManager} from './viewportColumnManager.js'
 import ViewportCenterLine from './ui/viewportCenterLine.js'
@@ -46,11 +49,23 @@ import ROIManager from './roi/ROIManager.js'
 import ROITable from './roi/ROITable.js'
 import ROIMenu from './roi/ROIMenu.js'
 import TrackROISet from "./roi/trackROISet.js"
-import ROITableControl from './ui/roiTableControl.js'
+import ROITableControl from './roi/roiTableControl.js'
 import SampleInfo from "./sample/sampleInfo.js"
 import SampleInfoViewport from "./sample/sampleInfoViewport.js"
 import HicFile from "./hic/straw/hicFile.js"
 import {translateSession} from "./hic/shoeboxUtils.js"
+import Hub from "./ucsc/ucscHub.js"
+import MultiTrackSelectButton from "./ui/multiTrackSelectButton.js"
+import OverlayTrackButton from "./ui/overlayTrackButton.js"
+import MenuUtils from "./ui/menuUtils.js"
+import Genome from "./genome/genome.js"
+import {setDefaults} from "./igv-create.js"
+import {trackViewportPopoverList} from './trackViewport.js'
+import TrackBase from "./trackBase.js"
+import {bppSequenceThreshold} from "./sequenceTrack.js"
+import {loadGenbank} from "./gbk/genbankParser.js"
+import igvCss from "./embedCss.js"
+import {sampleInfoTileWidth, sampleInfoTileXShim} from "./sample/sampleInfoConstants.js"
 
 
 // css - $igv-scrollbar-outer-width: 14px;
@@ -68,6 +83,8 @@ const column_multi_locus_shim_width = 2 + 1 + 2
 
 class Browser {
 
+    static shadowRoot
+
     constructor(config, parentDiv) {
 
         this.config = config
@@ -75,9 +92,25 @@ class Browser {
         this.namespace = '.browser_' + this.guid
 
         this.parent = parentDiv
+        if(!Browser.shadowRoot) {
+            // Only attach the shadow dom once.  We can attach multiple browsers to the shadow root
+            Browser.shadowRoot = parentDiv.attachShadow({mode: "open"})
+            const sheet = new CSSStyleSheet()
+            sheet.replaceSync(igvCss)
+            Browser.shadowRoot.adoptedStyleSheets = [sheet]
+        }
 
         this.root = DOMUtils.div({class: 'igv-container'})
-        parentDiv.appendChild(this.root)
+        Browser.shadowRoot.appendChild(this.root)
+
+        // spinner
+        this.spinner = DOMUtils.div({class: 'igv-loading-spinner-container'})
+        this.root.appendChild(this.spinner)
+
+        this.spinner.appendChild(DOMUtils.div())
+        this.spinner.style.width = '64px'
+        this.spinner.style.height = '64px'
+        this.stopSpinner()
 
         this.alert = new Alert(this.root)
 
@@ -85,6 +118,8 @@ class Browser {
         this.root.appendChild(this.columnContainer)
 
         this.menuPopup = new MenuPopup(this.columnContainer)
+
+        this.menuUtils = new MenuUtils(this)
 
         this.initialize(config)
 
@@ -99,6 +134,12 @@ class Browser {
 
         // Map of event name -> [ handlerFn, ... ]
         this.eventHandlers = {}
+
+        if (config.listeners) {
+            for (let evt of Object.keys(config.listeners)) {
+                this.on(evt, config.listeners[evt])
+            }
+        }
 
         this.on('trackremoved', () => {
 
@@ -120,11 +161,29 @@ class Browser {
             }
         })
 
+        this.on('didchangecolumnlayout', () => {
+            if (trackViewportPopoverList.length > 0) {
+                const len = trackViewportPopoverList.length
+                for (let i = 0; i < len; i++) {
+                    trackViewportPopoverList[i].dispose()
+                }
+                trackViewportPopoverList.length = 0
+            }
+        })
+
         this.addMouseHandlers()
 
         this.sampleInfo = new SampleInfo(this)
 
         this.setControls(config)
+    }
+
+    startSpinner() {
+        this.spinner.style.display = 'flex'
+    }
+
+    stopSpinner() {
+        this.spinner.style.display = 'none'
     }
 
     initialize(config) {
@@ -141,19 +200,16 @@ class Browser {
             this.nucleotideColors[key.toLowerCase()] = this.nucleotideColors[key]
         }
 
-        this.trackLabelsVisible = config.showTrackLabels
+        this.doShowTrackLabels = config.showTrackLabels
 
-        this.roiTableVisible = config.showROITable
-        this.showROITableButton = config.showROITableButton
+        this.doShowROITable = config.showROITable
+        this.doShowROITableButton = config.doShowROITableButton
 
-        this.isCenterLineVisible = config.showCenterGuide
+        this.doShowCenterLine = config.showCenterGuide
 
-        this.cursorGuideVisible = config.showCursorGuide
-
-        this.showSampleInfoButton = false
+        this.doShowCursorGuide = config.showCursorGuide
 
         this.showSampleNames = config.showSampleNames
-        this.showSampleNameButton = config.showSampleNameButton
 
         this.sampleNameViewportWidth = undefined
 
@@ -190,8 +246,6 @@ class Browser {
 
     createStandardControls(config) {
 
-        this.navbarManager = new NavbarManager(this)
-
         const $navBar = $('<div>', {class: 'igv-navbar'})
         this.$navigation = $navBar
 
@@ -216,10 +270,7 @@ class Browser {
 
         // chromosome select widget
         this.chromosomeSelectWidget = new ChromosomeSelectWidget(this, $genomicLocation.get(0))
-        if (undefined === config.showChromosomeWidget) {
-            config.showChromosomeWidget = true   // Default to true
-        }
-        if (true === config.showChromosomeWidget) {
+        if (config.showChromosomeWidget !== false) {
             this.chromosomeSelectWidget.show()
         } else {
             this.chromosomeSelectWidget.hide()
@@ -240,7 +291,7 @@ class Browser {
         const searchIconContainer = DOMUtils.div({class: 'igv-search-icon-container'})
         $searchContainer.append($(searchIconContainer))
 
-        searchIconContainer.appendChild(Icon.createIcon("search"))
+        searchIconContainer.appendChild(createIcon("search"))
 
         searchIconContainer.addEventListener('click', () => this.doSearch(this.$searchInput.val()))
 
@@ -252,6 +303,11 @@ class Browser {
         const $toggle_button_container = $('<div class="igv-navbar-toggle-button-container">')
         $navbarRightContainer.append($toggle_button_container)
         this.$toggle_button_container = $toggle_button_container
+
+        this.overlayTrackButton = new OverlayTrackButton(this, $toggle_button_container.get(0))
+        this.overlayTrackButton.setVisibility(false)
+
+        this.multiTrackSelectButton = new MultiTrackSelectButton(this, $toggle_button_container.get(0))
 
         this.cursorGuide = new CursorGuide(this.columnContainer, this)
 
@@ -270,7 +326,7 @@ class Browser {
         this.sampleNameControl = new SampleNameControl($toggle_button_container.get(0), this)
 
         if (true === config.showSVGButton) {
-            this.svgSaveControl = new SVGSaveControl($toggle_button_container.get(0), this)
+            this.saveImageControl = new SaveImageControl($toggle_button_container.get(0), this)
         }
 
         if (config.customButtons) {
@@ -284,6 +340,9 @@ class Browser {
         if (false === config.showNavigation) {
             this.$navigation.hide()
         }
+
+        this.sliderDialog = new SliderDialog(this.root)
+        this.sliderDialog.container.id = `igv-slider-dialog-${DOMUtils.guid()}`
 
         this.inputDialog = new InputDialog(this.root)
         this.inputDialog.container.id = `igv-input-dialog-${DOMUtils.guid()}`
@@ -309,7 +368,7 @@ class Browser {
     }
 
     getSampleInfoViewportWidth() {
-        return SampleInfoViewport.getSampleInfoColumnWidth(this)
+        return this.getSampleInfoColumnWidth()
     }
 
     isMultiLocusMode() {
@@ -354,7 +413,7 @@ class Browser {
      */
     toSVG() {
 
-        const {y, width, height} = this.columnContainer.getBoundingClientRect()
+        const {x, y, width, height} = this.columnContainer.getBoundingClientRect()
 
         const h_render = 8000
 
@@ -381,9 +440,15 @@ class Browser {
         const context = new C2S(config)
 
         // tracks -> SVG
+        const delta = {deltaX: 0, deltaY: -y}
         for (let trackView of this.trackViews) {
-            trackView.renderSVGContext(context, {deltaX: 0, deltaY: -y})
+            trackView.renderSVGContext(context, delta)
         }
+
+        // ROI -> SVG
+        delta.deltaX = x
+        this.roiManager.renderSVGContext(context, delta)
+
         // reset height to trim away unneeded svg canvas real estate. Yes, a bit of a hack.
         context.setHeight(height)
 
@@ -413,10 +478,16 @@ class Browser {
         FileUtils.download(path, data)
     }
 
+    savePNGtoFile(filename) {
+        html2canvas(this.columnContainer, {allowTaint: true}).then(canvas => {
+            const path = filename || 'igvjs.png'
+            const data = canvas.toDataURL('image/png')
+            FileUtils.download(path, data)
+        })
+    }
+
     /**
      * Initialize a session from an object, json, or by loading from a file.
-     *
-     * TODO Really should be split into at least 2 functions, load from file and load from object/json
      *
      * @param options
      * @returns {*}
@@ -430,42 +501,57 @@ class Browser {
 
         let session
         if (options.url || options.file) {
-            session = await loadSessionFile(options)
+            session = await Browser.loadSessionFile(options)
+            // if (options.parentApp``) {
+            //     session.parentApp = options.parentApp
+            // }
         } else {
             session = options
         }
         return this.loadSessionObject(session)
-
-
-        async function loadSessionFile(options) {
-
-            const urlOrFile = options.url || options.file
-
-            if (options.url && (options.url.startsWith("blob:") || options.url.startsWith("data:"))) {
-                const json = Browser.uncompressSession(options.url)
-                return JSON.parse(json)
-
-            } else {
-                let filename = options.filename
-                if (!filename) {
-                    filename = (options.url ? await getFilename(options.url) : options.file.name)
-                }
-
-                if (filename.endsWith(".xml")) {
-
-                    const knownGenomes = GenomeUtils.KNOWN_GENOMES
-                    const string = await igvxhr.loadString(urlOrFile)
-                    return new XMLSession(string, knownGenomes)
-
-                } else if (filename.endsWith(".json")) {
-                    return igvxhr.loadJson(urlOrFile)
-                } else {
-                    return undefined
-                }
-            }
-        }
     }
 
+    /**
+     * Load and parse a session uri or file, and return a session object.  Handles data uris as well as urls.
+     *
+     * @param options
+     * @returns {Promise<*|XMLSession>}
+     */
+    static async loadSessionFile(options) {
+
+        const urlOrFile = options.url || options.file
+
+        let config
+        if (options.url && StringUtils.isString(options.url) && (options.url.startsWith("blob:") || options.url.startsWith("data:"))) {
+            const json = Browser.uncompressSession(options.url)
+            config = JSON.parse(json)
+        } else {
+            let filename = options.filename
+            if (!filename) {
+                filename = (options.url ? await getFilename(options.url) : options.file.name)
+            }
+
+            if (filename.endsWith(".xml")) {
+                const knownGenomes = GenomeUtils.KNOWN_GENOMES
+                const string = await igvxhr.loadString(urlOrFile)
+                config = new XMLSession(string, knownGenomes)
+
+            } else if (filename.endsWith("hub.txt")) {
+
+                const hub = await Hub.loadHub(urlOrFile, options)
+                const genomeConfig = hub.getGenomeConfig()
+                config = {
+                    reference: genomeConfig
+                }
+            } else if (filename.endsWith(".json")) {
+                config = await igvxhr.loadJson(urlOrFile)
+            } else {
+                throw Error("Unrecognized session file format:" + filename)
+            }
+        }
+        return setDefaults(config)
+
+    }
 
     /**
      * Note:  public API function
@@ -476,6 +562,7 @@ class Browser {
 
         // prepare to load a new session, discarding DOM and state
         this.cleanHouseForSession()
+        this.config = session
 
         // Check for juicebox session
         if (session.browsers) {
@@ -514,10 +601,12 @@ class Browser {
             console.warn("No genome or reference object specified")
             return
         }
-        const genomeConfig = await GenomeUtils.expandReference(this.alert, genomeOrReference)
 
+        const genomeConfig = StringUtils.isString(genomeOrReference) ?
+            await GenomeUtils.expandReference(this.alert, genomeOrReference) :
+            genomeOrReference
 
-        await this.loadReference(genomeConfig, session.locus)
+        await this.loadReference(genomeConfig, genomeConfig.locus || session.locus)
 
         this.centerLineList = this.createCenterLineList(this.columnContainer)
 
@@ -593,18 +682,31 @@ class Browser {
         // Ensure that we always have a sequence track with no explicit URL (=> the reference genome sequence track)
         const pushSequenceTrack = trackConfigurations.filter(track => 'sequence' === track.type && !track.url && !track.fastaURL).length === 0
         if (pushSequenceTrack /*&& false !== this.config.showSequence*/) {
-            trackConfigurations.push({type: "sequence", order: defaultSequenceTrackOrder})
+            trackConfigurations.push({type: "sequence", order: defaultSequenceTrackOrder, removable: false})
         }
+
+        const localTrackFileNames = trackConfigurations.filter((config) => undefined !== config.file).map(({file}) => file)
+
+        const localIndexFileNames = trackConfigurations.filter((config) => undefined !== config.indexFile).map(({indexFile}) => indexFile)
+        if (localIndexFileNames.length > 0) {
+            localTrackFileNames.push(...localIndexFileNames)
+        }
+
+        if (localTrackFileNames.length > 0) {
+            alert(`Local files cannot be loaded automatically.\nThis session contains the following local file(s):\n${localTrackFileNames.map(str => `    ${str}`).join('\n')}`)
+        }
+
+        const nonLocalTrackConfigurations = trackConfigurations.filter((config) => undefined === config.file)
 
         // Maintain track order unless explicitly set
         let trackOrder = 1
-        for (let t of trackConfigurations) {
+        for (let t of nonLocalTrackConfigurations) {
             if (undefined === t.order) {
                 t.order = trackOrder++
             }
         }
 
-        await this.loadTrackList(trackConfigurations)
+        await this.loadTrackList(nonLocalTrackConfigurations)
 
         // The ruler and ideogram tracks are not explicitly loaded, but needs updated nonetheless.
         for (let rtv of this.trackViews.filter((tv) => tv.track.type === 'ruler' || tv.track.type === 'ideogram')) {
@@ -613,63 +715,8 @@ class Browser {
 
         this.updateUIWithReferenceFrameList()
 
-    }
+        return trackConfigurations
 
-    createCenterLineList(columnContainer) {
-
-        const centerLines = columnContainer.querySelectorAll('.igv-center-line')
-        for (let i = 0; i < centerLines.length; i++) {
-            centerLines[i].remove()
-        }
-
-        const centerLineList = []
-        const viewportColumns = columnContainer.querySelectorAll('.igv-column')
-        for (let i = 0; i < viewportColumns.length; i++) {
-            centerLineList.push(new ViewportCenterLine(this, this.referenceFrameList[i], viewportColumns[i]))
-        }
-
-        return centerLineList
-    }
-
-    /**
-     * Load a reference genome object.  This includes the fasta, and optional cytoband, but no tracks.  This method
-     * is used by loadGenome and loadSession.
-     *
-     * @param genomeConfig
-     * @param initialLocus
-     */
-    async loadReference(genomeConfig, initialLocus) {
-
-        const genome = await GenomeUtils.loadGenome(genomeConfig)
-
-        const genomeChange = undefined === this.genome || (this.genome.id !== genome.id)
-
-        this.genome = genome
-
-        this.updateNavbarDOMWithGenome(genome)
-
-        if (genomeChange) {
-            this.removeAllTracks()
-        }
-
-        let locus = getInitialLocus(initialLocus, genome)
-        const locusFound = await this.search(locus, true)
-        if (!locusFound) {
-            console.log("Initial locus not found: " + locus)
-            locus = genome.getHomeChromosomeName()
-            const locusFound = await this.search(locus, true)
-            if (!locusFound) {
-                throw new Error("Cannot set initial locus")
-            }
-        }
-
-        if (genomeChange && this.circularView) {
-            this.circularView.setAssembly({
-                name: this.genome.id,
-                id: this.genome.id,
-                chromosomes: makeCircViewChromosomes(this.genome)
-            })
-        }
     }
 
     cleanHouseForSession() {
@@ -691,14 +738,77 @@ class Browser {
 
     }
 
-    updateNavbarDOMWithGenome(genome) {
+    /**
+     * Load a reference genome object.  This includes the fasta, and optional cytoband, but no tracks.  This method
+     * is used by loadGenome and loadSession.
+     *
+     * @param genomeConfig
+     * @param initialLocus
+     */
+    async loadReference(genomeConfig, initialLocus) {
 
-        // If the genome is defined directly from a fasta file or data url the "id" will be the full url.  Don't display
-        // this.
-        let genomeLabel = (genome.id && genome.id.length < 10 ? genome.id : '')
+        this.removeAllTracks()   // Do this first, before new genome is set
+
+        let genome
+        if (genomeConfig.gbkURL) {
+            genome = await loadGenbank(genomeConfig.gbkURL)
+        } else {
+            genome = await Genome.createGenome(genomeConfig, this)
+        }
+
+        const genomeChange = undefined === this.genome || (this.genome.id !== genome.id)
+
+        this.genome = genome
+
+        this.updateNavbarDOMWithGenome(genome)
+
+
+        let locus = initialLocus || genome.initialLocus
+        if (Array.isArray(locus)) {
+            locus = locus.join(' ')
+        }
+
+        const locusFound = await this.search(locus, true)
+        if (!locusFound) {
+            throw new Error(`Cannot set initial locus ${locus}`)
+        }
+
+        if (genomeChange) {
+            let trackConfigurations
+            if (genomeConfig.hubURL) {
+                // TODO -- refactor this so "hub" is not loaded twice
+                const hub = await Hub.loadHub(genomeConfig.hubURL)
+                trackConfigurations = hub.getGroupedTrackConfigurations()
+            }
+            this.fireEvent('genomechange', [{genome, trackConfigurations}])
+
+            if (this.circularView) {
+                this.circularView.setAssembly({
+                    name: this.genome.id,
+                    id: this.genome.id,
+                    chromosomes: makeCircViewChromosomes(this.genome)
+                })
+            }
+        }
+    }
+
+    updateNavbarDOMWithGenome(genome) {
+        let genomeLabel = (genome.id && genome.id.length < 20 ? genome.id : `${genome.id.substring(0, 8)}...${genome.id.substring(genome.id.length - 8)}`)
         this.$current_genome.text(genomeLabel)
-        this.$current_genome.attr('title', genome.id || '')
-        this.chromosomeSelectWidget.update(genome)
+        this.$current_genome.attr('title', genome.description)
+
+        // chromosome select widget -- Show this IFF its not explicitly hidden AND the genome has pre-loaded chromosomes
+        const showChromosomeWidget =
+            this.config.showChromosomeWidget !== false &&
+            genome.chromosomeNames &&
+            genome.chromosomeNames.length > 1
+
+        if (showChromosomeWidget) {
+            this.chromosomeSelectWidget.update(genome)
+            this.chromosomeSelectWidget.show()
+        } else {
+            this.chromosomeSelectWidget.hide()
+        }
     }
 
     /**
@@ -710,10 +820,41 @@ class Browser {
      */
     async loadGenome(idOrConfig) {
 
-        const genomeConfig = await GenomeUtils.expandReference(this.alert, idOrConfig)
-        await this.loadReference(genomeConfig, undefined)
+        // Translate the generic "url" field, used by clients such as igv-webapp
+        if (idOrConfig.url) {
+            if (StringUtils.isString(idOrConfig.url) && idOrConfig.url.endsWith("/hub.txt")) {
+                idOrConfig.hubURL = idOrConfig.url
+                delete idOrConfig.url
+            } else if ("gbk" === getFileExtension(idOrConfig.url)) {
+                idOrConfig.gbkURL = idOrConfig.url
+                delete idOrConfig.url
+            }
+        }
 
-        const tracks = genomeConfig.tracks || []
+        let genomeConfig
+        const isHubGenome = idOrConfig.hubURL || (idOrConfig.url && StringUtils.isString(idOrConfig.url) && idOrConfig.url.endsWith("/hub.txt"))
+        if (isHubGenome) {
+            const hub = await Hub.loadHub(idOrConfig.hubURL || idOrConfig.url, idOrConfig)
+            genomeConfig = hub.getGenomeConfig()
+        } else if (StringUtils.isString(idOrConfig) || !(idOrConfig.url || idOrConfig.fastaURL || idOrConfig.twoBitURL || idOrConfig.gbkURL)) {
+            // Either an ID, a json string, or an object missing required properties.
+            genomeConfig = await GenomeUtils.expandReference(this.alert, idOrConfig)
+        } else {
+            genomeConfig = idOrConfig
+        }
+
+        await this.loadReference(genomeConfig)
+
+        let tracks
+        if (genomeConfig.gbkURL || "gbk" === genomeConfig.format) {
+            tracks = [{
+                name: "Annotations",
+                format: "gbk",
+                url: genomeConfig.gbkURL
+            }]
+        } else {
+            tracks = genomeConfig.tracks || []
+        }
 
         // Insure that we always have a sequence track
         const pushSequenceTrack = tracks.filter(track => track.type === 'sequence').length === 0
@@ -729,6 +870,17 @@ class Browser {
     }
 
     /**
+     * Load a UCSC single-file genome assembly hub.
+     * @param options
+     * @returns {Promise<void>}
+     */
+    async loadTrackHub(options) {
+        const hub = await Hub.loadHub(options.url, options)
+        const genomeConfig = setDefaults(hub.getGenomeConfig())
+        return this.loadGenome(genomeConfig)
+    }
+
+    /**
      * Called after a session load, search, pan (horizontal drag), or resize
      *
      * @param referenceFrameList
@@ -741,11 +893,37 @@ class Browser {
 
         const isWGV = (this.isMultiLocusWholeGenomeView() || GenomeUtils.isWholeGenomeView(referenceFrameList[0].chr))
 
-        this.navbarManager.navbarDidResize(this.$navigation.width(), isWGV)
+        navbarDidResize(this, this.$navigation.width(), isWGV)
 
-        toggleTrackLabels(this.trackViews, this.trackLabelsVisible)
+        toggleTrackLabels(this.trackViews, this.doShowTrackLabels)
 
-        this.setCenterLineAndCenterLineButtonVisibility(!GenomeUtils.isWholeGenomeView(referenceFrameList[0].chr))
+        if (this.doShowCenterLine && GenomeUtils.isWholeGenomeView(referenceFrameList[0].chr)) {
+            this.centerLineButton.boundMouseClickHandler()
+        }
+
+        if (this.doShowCursorGuide && GenomeUtils.isWholeGenomeView(referenceFrameList[0].chr)) {
+            this.cursorGuideButton.boundMouseClickHandler()
+        }
+
+        this.setCenterLineAndCenterLineButtonVisibility(GenomeUtils.isWholeGenomeView(referenceFrameList[0].chr))
+
+    }
+
+    setCenterLineAndCenterLineButtonVisibility(isWholeGenomeView) {
+
+        if (isWholeGenomeView) {
+            this.centerLineButton.setVisibility(!isWholeGenomeView)
+        } else {
+            this.centerLineButton.setVisibility(this.config.showCenterGuideButton)
+        }
+
+        for (let centerLine of this.centerLineList) {
+            if (isWholeGenomeView) {
+                this.setCenterLineVisibility(!isWholeGenomeView)
+            } else {
+                this.setCenterLineVisibility(this.doShowCenterLine)
+            }
+        }
 
     }
 
@@ -758,9 +936,9 @@ class Browser {
     }
 
     // cursor guide
-    setCursorGuideVisibility(cursorGuideVisible) {
+    setCursorGuideVisibility(doShowCursorGuide) {
 
-        if (cursorGuideVisible) {
+        if (doShowCursorGuide) {
             this.cursorGuide.show()
         } else {
             this.cursorGuide.hide()
@@ -772,27 +950,15 @@ class Browser {
     }
 
     // center line
-    setCenterLineVisibility(isCenterLineVisible) {
+    setCenterLineVisibility(doShowCenterLine) {
         for (let centerLine of this.centerLineList) {
-            if (true === isCenterLineVisible) {
+            if (true === doShowCenterLine) {
                 centerLine.show()
                 centerLine.repaint()
             } else {
                 centerLine.hide()
             }
         }
-    }
-
-    setCenterLineAndCenterLineButtonVisibility(isCenterLineVisible) {
-
-        for (let centerLine of this.centerLineList) {
-            const isShown = isCenterLineVisible && centerLine.isVisible
-            isShown ? centerLine.show() : centerLine.container.style.display = 'none'
-        }
-
-        const isShown = isCenterLineVisible && this.centerLineButton.isVisible
-        isShown ? this.centerLineButton.show() : this.centerLineButton.button.style.display = 'none'
-
     }
 
     /**
@@ -803,17 +969,13 @@ class Browser {
      */
     async loadTrackList(configList) {
 
-        // const [ config ] = configList
-        // if ('sequence' !== config.type && 'refgene' !== config.format) {
-        //
-        //     const extension = getFileExtension(config.url)
-        //
-        //     if ('txt' === extension) {
-        //         await this.sampleInfo.loadSampleInfoFile(this, config.url)
-        //         return undefined
-        //
-        //     }
-        // }
+        // Impose an order if not specified
+        let order = 0
+        for (let c of configList) {
+            if (c.order === undefined) {
+                c.order = order++
+            }
+        }
 
         const promises = []
         for (let config of configList) {
@@ -868,55 +1030,24 @@ class Browser {
 
         try {
 
-            const newTrack = await this.createTrack(config)
-
-            if (undefined === newTrack) {
+            // Load a hidden track -- used to populate searchable database without creating a track
+            if (config.hidden) {
+                const featureSource = FeatureSource(config, this.genome)
+                await featureSource.getFeatures({chr: "1", start: 0, end: Number.MAX_SAFE_INTEGER})
                 return
             }
 
-            // Set order field of track here, otherwise track order might get shuffled during asynchronous load
-            if (undefined === newTrack.order) {
-                newTrack.order = this.trackViews.length
+            const newTrack = await this.createTrack(config)
+
+            if ('sampleinfo' === config.type) {
+                this.layoutChange()
+                return
+            } else if (undefined === newTrack) {
+                return
             }
 
-            const trackView = new TrackView(this, this.columnContainer, newTrack)
-            this.trackViews.push(trackView)
-            toggleTrackLabels(this.trackViews, this.trackLabelsVisible)
 
-            if (typeof newTrack.postInit === 'function') {
-                try {
-                    trackView.startSpinner()
-                    await newTrack.postInit()
-                } finally {
-                    trackView.stopSpinner()
-                }
-            }
-
-            if (!newTrack.autoscaleGroup) {
-                // Group autoscale will get updated later (as a group)
-                if (config.sync) {
-                    await trackView.updateViews()
-                } else {
-                    trackView.updateViews()
-                }
-            }
-
-            if (typeof newTrack.hasSamples === 'function' && newTrack.hasSamples()) {
-
-                if (this.sampleInfo.isInitialized()) {
-                    this.sampleInfoControl.setButtonVisibility(true)
-                }
-
-                if (this.config.showSampleNameButton !== false) {
-                    this.sampleNameControl.show()   // If not explicitly set
-                }
-            }
-
-            // repositioned here to solve layout issue.
-            this.reorderTracks()
-            this.fireEvent('trackorderchanged', [this.getTrackOrder()])
-
-            return newTrack
+            return this.addTrack(config, newTrack)
 
         } catch (error) {
             const httpMessages =
@@ -933,6 +1064,56 @@ class Browser {
             msg += (": " + config.url)
             this.alert.present(new Error(msg), undefined)
         }
+    }
+
+    async addTrack(config, newTrack) {
+
+
+        // Set order field of track here, otherwise track order might get shuffled during asynchronous load
+        if (undefined === newTrack.order) {
+            newTrack.order = this.trackViews.length
+        }
+
+        const trackView = new TrackView(this, this.columnContainer, newTrack)
+        this.trackViews.push(trackView)
+        toggleTrackLabels(this.trackViews, this.doShowTrackLabels)
+
+        if (typeof newTrack.postInit === 'function') {
+            try {
+                trackView.startSpinner()
+                await newTrack.postInit()
+            } finally {
+                trackView.stopSpinner()
+            }
+        }
+
+        if (!newTrack.autoscaleGroup) {
+            // Group autoscale will get updated later (as a group)
+            if (config.sync) {
+                await trackView.updateViews()
+            } else {
+                trackView.updateViews()
+            }
+        }
+
+        if (typeof newTrack.hasSamples === 'function' && newTrack.hasSamples()) {
+
+            if (this.sampleInfo.isInitialized()) {
+                this.sampleInfoControl.setButtonVisibility(true)
+            }
+
+            if (this.config.showSampleNameButton !== false) {
+                this.sampleNameControl.show()   // If not explicitly set
+            }
+        }
+
+        // repositioned here to solve layout issue.
+        this.reorderTracks()
+        this.fireEvent('trackorderchanged', [this.getTrackOrder()])
+
+        return newTrack
+
+
     }
 
     /**
@@ -1060,7 +1241,7 @@ class Browser {
         }
 
         if ("sampleinfo" === type) {
-            await this.sampleInfo.loadSampleInfoFile(this, config.url)
+            await this.loadSampleInfo(config)
             return undefined
         } else {
             // Set defaults if specified
@@ -1174,6 +1355,7 @@ class Browser {
         return this.trackViews.filter(tv => tv.track && tv.track.name).map(tv => tv.track.name)
     }
 
+
     /**
      * NOTE: Public API function
      *
@@ -1252,6 +1434,18 @@ class Browser {
         return this.trackViews.filter(f).map(tv => tv.track)
     }
 
+    get tracks() {
+        return this.trackViews.map(tv => tv.track).filter(t => t !== undefined)
+    }
+
+
+    getTrackURLs() {
+        return new Set(this.tracks
+            .filter(track => track.config && StringUtils.isString(track.config.url))
+            .map(track => track.config.url))
+    }
+
+
     /**
      * Set the track height globally for all tracks.  (Note: Its not clear why this is useful).
      * @param newHeight
@@ -1288,7 +1482,7 @@ class Browser {
 
         if (this.referenceFrameList) {
             const isWGV = this.isMultiLocusWholeGenomeView() || GenomeUtils.isWholeGenomeView(this.referenceFrameList[0].chr)
-            this.navbarManager.navbarDidResize(this.$navigation.width(), isWGV)
+            navbarDidResize(this, this.$navigation.width(), isWGV)
         }
 
         resize.call(this)
@@ -1301,6 +1495,12 @@ class Browser {
 
         this.updateLocusSearchWidget()
 
+        for (let frame of this.referenceFrameList) {
+            if (frame.bpPerPixel <= bppSequenceThreshold) {
+                await this.genome.getSequence(frame.chr, frame.start, frame.start + 1)
+            }
+        }
+
         for (let centerGuide of this.centerLineList) {
             centerGuide.repaint()
         }
@@ -1311,59 +1511,37 @@ class Browser {
                 await trackView.updateViews()
             }
         } else {
-            // Group autoscale
-            const groupAutoscaleTracks = {}
-            const otherTracks = []
-            for (let trackView of trackViews) {
-                const group = trackView.track.autoscaleGroup
-                if (group) {
-                    var l = groupAutoscaleTracks[group]
-                    if (!l) {
-                        l = []
-                        groupAutoscaleTracks[group] = l
+            // Group autoscale is done here as it involves multiple tracks.  Individual track autoscale is done in TrackView
+            const groupAutoscaleTrackViews = {}
+            const otherTrackViews = []
+
+            // Isolate group autoscale trackViews
+            for (const trackView of trackViews) {
+                if (trackView.track.autoscaleGroup) {
+                    const autoscaleGroup = trackView.track.autoscaleGroup
+                    if (!groupAutoscaleTrackViews[autoscaleGroup]) {
+                        groupAutoscaleTrackViews[autoscaleGroup] = []
                     }
-                    l.push(trackView)
+                    groupAutoscaleTrackViews[autoscaleGroup].push(trackView)
                 } else {
-                    otherTracks.push(trackView)
+                    otherTrackViews.push(trackView)
                 }
             }
 
-            if (Object.entries(groupAutoscaleTracks).length > 0) {
-
-                const keys = Object.keys(groupAutoscaleTracks)
-                for (let group of keys) {
-
-                    const groupTrackViews = groupAutoscaleTracks[group]
-                    const promises = []
-
-                    for (let trackView of groupTrackViews) {
-                        promises.push(trackView.getInViewFeatures())
-                    }
-
-                    const featureArray = await Promise.all(promises)
-
-                    var allFeatures = [], dataRange
-
-                    for (let features of featureArray) {
-                        allFeatures = allFeatures.concat(features)
-                    }
-                    dataRange = doAutoscale(allFeatures)
-
-                    const p = []
-                    for (let trackView of groupTrackViews) {
-                        trackView.track.dataRange = dataRange
+            // Calculate group autoscale dataRange
+            if (Object.entries(groupAutoscaleTrackViews).length > 0) {
+                for (const [group, trackViews] of Object.entries(groupAutoscaleTrackViews)) {
+                    const featureArray = await Promise.all(trackViews.map(trackView => trackView.getInViewFeatures()))
+                    const dataRange = doAutoscale(featureArray.flat())
+                    for (const trackView of trackViews) {
+                        trackView.track.dataRange = Object.assign({}, dataRange)
                         trackView.track.autoscale = false
-                        p.push(trackView.updateViews())
                     }
-                    await Promise.all(p)
+                    await Promise.all(trackViews.map(trackView => trackView.updateViews()))
                 }
-
             }
 
-            await Promise.all(otherTracks.map(tv => tv.updateViews()))
-            // for (let trackView of otherTracks) {
-            //     await trackView.updateViews(force);
-            // }
+            await Promise.all(otherTrackViews.map(tv => tv.updateViews()))
         }
 
     }
@@ -1386,10 +1564,12 @@ class Browser {
             referenceFrame.end = referenceFrame.start + referenceFrame.bpPerPixel * width
         }
 
-        this.chromosomeSelectWidget.select.value = referenceFrameList.length === 1 ? this.referenceFrameList[0].chr : ''
+        if (this.chromosomeSelectWidget) {
+            this.chromosomeSelectWidget.select.value = referenceFrameList.length === 1 ? this.referenceFrameList[0].chr : ''
+        }
 
         const loc = this.referenceFrameList.map(rf => rf.getLocusString()).join(' ')
-        //const loc = this.referenceFrameList.length === 1 ?   this.referenceFrameList[0].getLocusString() : '';
+
         this.$searchInput.val(loc)
 
         this.fireEvent('locuschange', [this.referenceFrameList])
@@ -1459,6 +1639,7 @@ class Browser {
         // TODO -- this is really ugly
         const {$viewport} = this.trackViews[0].viewports[indexLeft]
         const viewportColumn = viewportColumnManager.insertAfter($viewport.get(0).parentElement)
+        this.fireEvent('didchangecolumnlayout')
 
         if (indexRight === this.referenceFrameList.length) {
             this.referenceFrameList.push(newReferenceFrame)
@@ -1481,12 +1662,30 @@ class Browser {
         await this.updateViews(true)
     }
 
+    createCenterLineList(columnContainer) {
+
+        const centerLines = columnContainer.querySelectorAll('.igv-center-line')
+        for (let i = 0; i < centerLines.length; i++) {
+            centerLines[i].remove()
+        }
+
+        const centerLineList = []
+        const viewportColumns = columnContainer.querySelectorAll('.igv-column')
+        for (let i = 0; i < viewportColumns.length; i++) {
+            centerLineList.push(new ViewportCenterLine(this, this.referenceFrameList[i], viewportColumns[i]))
+        }
+
+        return centerLineList
+    }
+
     async removeMultiLocusPanel(referenceFrame) {
 
         // find the $column corresponding to this referenceFrame and remove it
         const index = this.referenceFrameList.indexOf(referenceFrame)
         const {$viewport} = this.trackViews[0].viewports[index]
+
         viewportColumnManager.removeColumnAtIndex(index, $viewport.parent().get(0))
+        this.fireEvent('didchangecolumnlayout')
 
         for (let {viewports} of this.trackViews) {
             viewports[index].dispose()
@@ -1625,6 +1824,7 @@ class Browser {
 
             // Insert viewport columns preceding the sample info column
             viewportColumnManager.insertBefore(this.columnContainer.querySelector('.igv-sample-info-column'), this.referenceFrameList.length)
+            this.fireEvent('didchangecolumnlayout')
 
             this.centerLineList = this.createCenterLineList(this.columnContainer)
 
@@ -1644,16 +1844,42 @@ class Browser {
         }
     }
 
-    async loadSampleInformation(url) {
-        var name = url
-        if (FileUtils.isFile(url)) {
-            name = url.name
+    async loadSampleInfo(config) {
+
+        await this.sampleInfo.loadSampleInfoFile(config.url)
+
+        for (const {sampleNameViewport} of this.trackViews) {
+            sampleNameViewport.setWidth(this.getSampleInfoColumnWidth())
         }
-        var ext = name.substr(name.lastIndexOf('.') + 1)
-        if (ext === 'fam') {
-            this.sampleInformation = await loadPlinkFile(url)
+
+        await this.layoutChange()
+
+        const found = this.findTracks(t => typeof t.getSamples === 'function')
+        if (found.length > 0) {
+            this.sampleInfoControl.setButtonVisibility(true)
         }
-    };
+    }
+
+    getSampleInfoColumnWidth() {
+
+        if (!this.sampleInfo.attributeCount) {
+            return 0
+        } else {
+
+            const found = this.findTracks(t => typeof t.getSamples === 'function')
+            const isFound = found.length > 0
+            const isInitialized = this.sampleInfo.isInitialized()
+            const doShowSampleInfo = this.sampleInfoControl.showSampleInfo
+            const status = isFound && isInitialized && doShowSampleInfo
+
+            if (status) {
+                return this.sampleInfo.attributeCount * sampleInfoTileWidth + sampleInfoTileXShim
+            } else {
+                return 0
+            }
+        }
+    }
+
 
 // EVENTS
 
@@ -1769,13 +1995,14 @@ class Browser {
         this.sampleInfo.toJSON(trackJson)
 
         const errors = []
-        for (let {track} of this.trackViews) {
+        for (const {track} of this.trackViews) {
             try {
+
                 let config
                 if (typeof track.getState === "function") {
-                    config = track.getState()
-                } else {
-                    config = track.config
+                    config = TrackBase.localFileInspection(track.getState())
+                } else if (track.config) {
+                    config = TrackBase.localFileInspection(track.config)
                 }
 
                 if (config) {
@@ -1783,12 +2010,15 @@ class Browser {
                     if (config.browser) {
                         delete config.browser
                     }
-                    config.order = track.order //order++;
+
+                    config.order = track.order
+
                     trackJson.push(config)
                 }
             } catch (e) {
-                console.error(`Track: ${track.name}: ${e}`)
-                errors.push(`Track: ${track.name}: ${e}`)
+                const str = `Track: ${track.name}: ${e}`
+                console.error(str)
+                errors.push(str)
             }
         }
 
@@ -1803,8 +2033,20 @@ class Browser {
 
         json["tracks"] = trackJson
 
-        return json        // This is an object, not a json string
+        const localFileDetections = []
+        for (const json of trackJson) {
+            for (const key of Object.keys(json)) {
+                if ('file' === key || 'indexFile' === key) {
+                    localFileDetections.push(json[key])
+                }
+            }
+        }
 
+        if (localFileDetections.length > 0) {
+            alert(`This session will be saved with the following local file(s):\n${localFileDetections.map(str => `    ${str}`).join('\n')}\nLocal files cannot be loaded automatically when a saved session is restored.`)
+        }
+
+        return json
     }
 
     compressedSession() {
@@ -2179,14 +2421,6 @@ function mouseUpOrLeave(e) {
 }
 
 
-function getInitialLocus(locus, genome) {
-    if (locus) {
-        return Array.isArray(locus) ? locus.join(' ') : locus
-    } else {
-        return genome.getHomeChromosomeName()
-    }
-}
-
 function logo() {
 
     return $(
@@ -2216,16 +2450,5 @@ function toggleTrackLabels(trackViews, isVisible) {
     }
 }
 
-async function searchWebService(browser, locus, searchConfig) {
-
-    let path = searchConfig.url.replace("$FEATURE$", locus.toUpperCase())
-    if (path.indexOf("$GENOME$") > -1) {
-        path = path.replace("$GENOME$", (browser.genome.id ? browser.genome.id : "hg19"))
-    }
-    const result = await igvxhr.loadString(path)
-    return {result: result, locusSearchString: locus}
-}
-
-export {searchWebService}
 export default Browser
 

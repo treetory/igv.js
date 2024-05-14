@@ -11,10 +11,10 @@ import {registerFileFormats} from "./util/trackUtils.js"
 import {igvxhr} from "../node_modules/igv-utils/src/index.js"
 import {registerTrackClass, registerTrackCreatorFunction} from "./trackFactory.js"
 import TrackBase from "./trackBase.js"
+import Hub from "./ucsc/ucscHub.js"
+import Browser from "./browser.js"
 
 const setApiKey = igvxhr.setApiKey
-
-embedCss()
 
 function setGoogleOauthToken(accessToken) {
     return igvxhr.setOauthToken(accessToken)
@@ -45,6 +45,7 @@ export default {
     TrackBase,
     registerTrackClass,
     registerTrackCreatorFunction,
-    registerFileFormats
+    registerFileFormats,
+    loadSessionFile: Browser.loadSessionFile
 }
 

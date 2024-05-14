@@ -1,28 +1,3 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2016-2017 The Regents of the University of California
- * Author: Jim Robinson
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- */
 
 import BamAlignment from "./bamAlignment.js"
 import AlignmentBlock from "./alignmentBlock.js"
@@ -35,8 +10,8 @@ import BamFilter from "./bamFilter.js"
  *
  * https://github.com/dasmoth/dalliance/blob/master/js/bam.js
  */
-
-const SEQ_DECODER = ['=', 'A', 'C', 'x', 'G', 'x', 'x', 'x', 'T', 'x', 'x', 'x', 'x', 'x', 'x', 'N']
+//=ACMGRSVTWYHKDBN
+const SEQ_DECODER = ['=', 'A', 'C', 'M', 'G', 'R', 'S', 'V', 'T', 'W', 'Y', 'H', 'K', 'D', 'B', 'N']
 const CIGAR_DECODER = ['M', 'I', 'D', 'N', 'S', 'H', 'P', '=', 'X', '?', '?', '?', '?', '?', '?', '?']
 const READ_STRAND_FLAG = 0x10
 const MATE_STRAND_FLAG = 0x20
@@ -51,23 +26,11 @@ const MAXIMUM_SAMPLING_DEPTH = 10000
 
 const BamUtils = {
 
-    readHeader: function (url, options, genome) {
+    readHeader: async function (url, options, genome) {
 
-        return igvxhr.loadArrayBuffer(url, options)
-
-            .then(function (compressedBuffer) {
-
-                var header, unc, uncba
-
-                unc = BGZip.unbgzf(compressedBuffer)
-                uncba = unc
-
-                header = BamUtils.decodeBamHeader(uncba, genome)
-
-                return header
-
-            })
-
+        const compressedBuffer = await igvxhr.loadArrayBuffer(url, options)
+        const uncba = BGZip.unbgzf(compressedBuffer)
+        return BamUtils.decodeBamHeader(uncba, genome)
     },
 
     /**
@@ -97,7 +60,6 @@ const BamUtils = {
 
         chrToIndex = {}
         chrNames = []
-        chrAliasTable = {}
 
         for (i = 0; i < nRef; ++i) {
             var lName = readInt(ba, p)
@@ -111,11 +73,6 @@ const BamUtils = {
             chrToIndex[name] = i
             chrNames[i] = name
 
-            if (genome) {
-                alias = genome.getChromosomeName(name)
-                chrAliasTable[alias] = name
-            }
-
             p = p + 8 + lName
         }
 
@@ -123,8 +80,7 @@ const BamUtils = {
             magicNumber: magic,
             size: p,
             chrNames: chrNames,
-            chrToIndex: chrToIndex,
-            chrAliasTable: chrAliasTable
+            chrToIndex: chrToIndex
         }
 
     },
@@ -421,12 +377,6 @@ const BamUtils = {
             console.log("Warning: attempt to set sampling depth > maximum value of " + MAXIMUM_SAMPLING_DEPTH)
             reader.samplingDepth = MAXIMUM_SAMPLING_DEPTH
         }
-
-        if (config.viewAsPairs) {
-            reader.pairsSupported = true
-        } else {
-            reader.pairsSupported = config.pairsSupported === undefined ? true : config.pairsSupported
-        }
     },
 
     setPairOrientation: function (alignment) {
@@ -473,30 +423,6 @@ const BamUtils = {
             // }
             alignment.pairOrientation = tmp.join('')
         }
-    },
-
-    computeLengthOnReference: function (cigarString) {
-
-        let len = 0
-        let buf = ''
-
-        for (let i = 0; i < cigarString.length; i++) {
-            const c = cigarString.charCodeAt(i)
-            if (c > 47 && c < 58) {
-                buf += cigarString.charAt(i)
-            } else {
-                switch (c) {
-                    case 78:  // N
-                    case 68:  // D
-                    case 77:  // M
-                    case 61:  // =
-                    case 88:  // X
-                        len += parseInt(buf.toString())
-                }
-                buf = ''
-            }
-        }
-        return len
     }
 }
 

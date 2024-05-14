@@ -1,6 +1,6 @@
-import {DOMUtils} from '../../node_modules/igv-ui/dist/igv-ui.js'
+import * as DOMUtils from "../ui/utils/dom-utils.js"
 import ROISet, {screenCoordinates} from './ROISet.js'
-import {Popover} from '../../node_modules/igv-ui/dist/igv-ui.js'
+import Popover from "../ui/popover.js"
 
 class ROIManager {
 
@@ -19,8 +19,8 @@ class ROIManager {
     async initialize() {
 
         if (this.roiSets.length > 0) {
-            this.browser.showROITableButton = true
-            this.browser.roiTableControl.setVisibility(this.browser.showROITableButton)
+            this.browser.doShowROITableButton = true
+            this.browser.roiTableControl.setVisibility(this.browser.doShowROITableButton)
         }
 
         const promises = this.roiSets.map(roiSet => this.renderROISet({
@@ -35,6 +35,11 @@ class ROIManager {
 
         const records = await this.getTableRecords()
         this.roiTable.renderTable(records)
+
+        if (this.roiSets.length > 0) {
+            const isVisible = this.roiSets[ 0 ].isVisible
+            this.roiTable.setROIVisibility(isVisible)
+        }
 
     }
 
@@ -107,7 +112,7 @@ class ROIManager {
 
         userDefinedROISet.addFeature(feature)
 
-        if (false === this.browser.showROITableButton) {
+        if (false === this.browser.doShowROITableButton) {
             this.setROITableButtonVisibility(true)
         }
 
@@ -118,8 +123,18 @@ class ROIManager {
     }
 
     setROITableButtonVisibility(isVisible) {
-        this.browser.showROITableButton = isVisible
-        this.browser.roiTableControl.setVisibility(this.browser.showROITableButton)
+        this.browser.doShowROITableButton = isVisible
+        this.browser.roiTableControl.setVisibility(this.browser.doShowROITableButton)
+    }
+
+    toggleROIs() {
+
+        const isVisible = !(this.roiSets[ 0 ].isVisible)
+        this.roiTable.setROIVisibility(isVisible)
+
+        for (const roiSet of this.roiSets) {
+            roiSet.isVisible = isVisible
+        }
     }
 
     async renderAllROISets() {
@@ -183,6 +198,7 @@ class ROIManager {
         regionElement.style.left = `${pixelX}px`
         regionElement.style.width = `${pixelWidth}px`
         regionElement.style.backgroundColor = roiSet.color
+        regionElement.dataset.color = roiSet.color
         regionElement.dataset.region = regionKey
 
         const header = DOMUtils.div()
@@ -205,7 +221,7 @@ class ROIManager {
                 if (this.popover) {
                     this.popover.dispose()
                 }
-                this.popover = new Popover(columnContainer, roiSet.name)
+                this.popover = new Popover(columnContainer, true, roiSet.name, undefined)
                 this.popover.presentContentWithEvent(event, name)
             })
         } else {
@@ -213,6 +229,23 @@ class ROIManager {
         }
 
         return regionElement
+    }
+
+    renderSVGContext(context, {deltaX, deltaY}) {
+
+        for (const regionElement of document.querySelectorAll('.igv-roi-region')) {
+
+            // body
+            const { x, y, width, height } = regionElement.getBoundingClientRect()
+            context.fillStyle = regionElement.style.backgroundColor
+            context.fillRect(x-deltaX, y+deltaY, width, height)
+
+            // header
+            const header = regionElement.querySelector('div')
+            const { x:xx, y:yy, width:ww, height:hh } = header.getBoundingClientRect()
+            context.fillStyle = header.style.backgroundColor
+            context.fillRect(xx-deltaX, yy+deltaY, ww, hh)
+        }
     }
 
     async getUserDefinedROISet() {
@@ -317,9 +350,10 @@ function createSelector(regionKey) {
 }
 
 function parseRegionKey(regionKey) {
-    let [chr, ss, ee] = regionKey.split('-')
-    ss = parseInt(ss)
-    ee = parseInt(ee)
+    let regionParts = regionKey.split('-')
+    let ee = parseInt(regionParts.pop())
+    let ss = parseInt(regionParts.pop())
+    let chr = regionParts.join('-')
 
     return {chr, start: ss, end: ee, locus: `${chr}:${ss}-${ee}`, bedRecord: `${chr}\t${ss}\t${ee}`}
 }

@@ -1,4 +1,5 @@
-import { DOMUtils, UIUtils } from '../../node_modules/igv-ui/dist/igv-ui.js'
+import * as DOMUtils from "../ui/utils/dom-utils.js"
+import * as UIUtils from  "../ui/utils/ui-utils.js"
 
 class ROIMenu {
     constructor(browser, parent) {
@@ -6,7 +7,7 @@ class ROIMenu {
         this.browser = browser
 
         // container
-        this.container = DOMUtils.div({ class: 'igv-roi-menu-next-gen' })
+        this.container = DOMUtils.div({ class: 'igv-roi-menu' })
         parent.appendChild(this.container)
 
         // header
@@ -54,7 +55,7 @@ class ROIMenu {
 
             const callback = () => {
 
-                const value = this.browser.inputDialog.input.value || ''
+                const value = this.browser.inputDialog.value || ''
                 feature.name = value.trim()
 
                 this.container.style.display = 'none'

@@ -25,7 +25,7 @@
 
 import $ from "./vendor/jquery-3.3.1.slim.js"
 import IGVGraphics from './igv-canvas.js'
-import {DOMUtils} from "../node_modules/igv-ui/dist/igv-ui.js"
+import * as DOMUtils from "./ui/utils/dom-utils.js"
 import TrackViewport from "./trackViewport.js"
 
 class IdeogramViewport extends TrackViewport {
@@ -105,7 +105,7 @@ class IdeogramViewport extends TrackViewport {
         this.draw({referenceFrame: this.referenceFrame})
     }
 
-    draw({referenceFrame}) {
+    async draw({referenceFrame}) {
 
         IGVGraphics.configureHighDPICanvas(this.ideogram_ctx, this.$viewport.width(), this.$viewport.height())
 
